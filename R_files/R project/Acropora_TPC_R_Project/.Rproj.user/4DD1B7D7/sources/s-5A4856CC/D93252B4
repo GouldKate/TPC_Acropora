@@ -1,0 +1,33 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1567781737716.000,
+    "dirty" : false,
+    "encoding" : "",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "D93252B4",
+    "lastKnownWriteTime" : 2087907516640,
+    "last_content_update" : 1567781737716,
+    "path" : null,
+    "project_path" : null,
+    "properties" : {
+        "cacheKey" : "25CAD962",
+        "caption" : "topt_thin",
+        "contentUrl" : "grid_resource/gridviewer.html?env=&obj=topt_thin&cache_key=25CAD962",
+        "displayedObservations" : "90",
+        "environment" : "",
+        "expression" : "topt_thin",
+        "object" : "topt_thin",
+        "preview" : "0",
+        "totalObservations" : "90",
+        "variables" : "10"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 20,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_dataframe"
+}

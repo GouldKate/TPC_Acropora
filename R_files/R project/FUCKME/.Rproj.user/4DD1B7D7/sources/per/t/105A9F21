@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1568072540050.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "2576187516",
+    "id" : "105A9F21",
+    "lastKnownWriteTime" : 1568229034,
+    "last_content_update" : 1568229034958,
+    "path" : "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/2019laptop/Documents/TPC_Acropora/R_files/Scripts/Final/TPCs_ALL_Acropora_final.R",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "41,0",
+        "scrollLine" : "0"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

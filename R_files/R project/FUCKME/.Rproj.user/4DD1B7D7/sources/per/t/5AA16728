@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1568409016570.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "524198856",
+    "id" : "5AA16728",
+    "lastKnownWriteTime" : 1568408659,
+    "last_content_update" : 1568408659,
+    "path" : "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/2019laptop/Documents/TPC_Mesop_BDA/R_scripts/Data_Manipulation_final.R",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "518,20",
+        "scrollLine" : "0",
+        "tempName" : "Untitled2"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 6,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

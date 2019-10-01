@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1568229401288.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "3589035927",
+    "id" : "8B688797",
+    "lastKnownWriteTime" : 1569532453,
+    "last_content_update" : 1569532453815,
+    "path" : "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/2019laptop/Documents/TPC_Mesop_BDA/R_scripts/Thermal_Performannce_Curves_logGPandR.R",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "365,0",
+        "scrollLine" : "0"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

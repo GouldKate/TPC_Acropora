@@ -1,0 +1,20 @@
+Pmaxever<-ggplot(subset(Pmax1,rate.type=="GP"), aes(x=replicas, Pmax, colour=treatment, shape= genotype))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Pmax")+
+  xlab("Replicas")+
+  labs(title="Mean Pmax across Replicas (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("Pmaxever")
+
+
+
+PMAXR<-ggplot(subset(Pmax1,rate.type=="R"), aes(x=replicas, Pmax, colour=treatment, shape= replicas))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Pmax")+
+  xlab("Replicas")+
+  labs(title="Mean Pmax across Replicas (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("PMAXR")
+

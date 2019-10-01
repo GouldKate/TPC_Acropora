@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1568229634898.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "4037259028",
+    "id" : "505932ED",
+    "lastKnownWriteTime" : 1567798999,
+    "last_content_update" : 1567798999,
+    "path" : "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/June 2019/TPC_RScript/GitHub/Thermal Performance SA/Final R code/Data_Man.R",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "39,0",
+        "scrollLine" : "0"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 10,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

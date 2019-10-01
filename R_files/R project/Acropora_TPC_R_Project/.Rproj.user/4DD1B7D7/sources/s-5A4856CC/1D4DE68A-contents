@@ -1,0 +1,1935 @@
+##Photosynthesis and Respiration code
+
+rm(list=ls())
+
+
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+
+library(nls.multstart)
+library(broom)
+library(purrr)
+library(plyr)
+library(dplyr)
+library(boot)
+
+
+#set wd
+# get the file path
+
+setwd("C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/June 2019")
+getwd()
+
+# had to adjust respiration- to reflect Pgross and respiration (saved here on desktop as FINAL_resp_data)
+#read in your rawdata
+raw_data <- read.csv("C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/Desktop/June 2019/TPC_RawData/final_resp_data.csv")#read in logged Gross Photosynthesis and respiration rates
+View(raw_data)
+#raw_data<-read.csv( '~/TPC_BDA/AllDataAnalysis_Presens_TPC_params/TPC_params_estimates_Topt/Saved datasheets from Script/AllData_GP_R_042019.csv') #call your dataframe
+
+#convert your C temperature to K
+raw_data%<>%
+  mutate(K=raw_data$Temp.C + 273.15)
+
+
+mydata<-raw_data
+
+
+View(mydata)
+
+write.csv(raw_data, "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/June 2019/TPC_RawData/final_resp_data.csv")
+
+
+##renameing fragment ID's to represent ALL temperatures
+mydata$fragment.ID2<-mydata$fragment.ID
+#
+mydata$fragment.ID2 <- as.character(mydata$fragment.ID2)
+#
+mydata$fragment.ID2 = substr(mydata$fragment.ID2,1,nchar(mydata$fragment.ID2)-1)
+#
+mydata<- mydata%>%
+  mutate(fragment.ID2=paste0(fragment.ID2, "_", light_dark))
+View(mydata)
+##renameing fragment ID's to represent ALL genotypes
+#mydata$fragment.ID3<-mydata$geno
+##
+#mydata$fragment.ID3 <- as.character(mydata$fragment.ID3)
+##
+#mydata<- mydata%>%
+#  mutate(fragment.ID3=paste0(fragment.ID3, "_", light_dark))
+#View(mydata)
+##
+########-----#made a test DF with just one treatment--------####
+require(dplyr)
+
+#test.df<-mydata%>%
+#  filter(fragment.ID2=="MA_light")
+#  
+test.df<-raw_data%>%
+  filter(species=="DLAB")%>%
+  filter(treatment=="deep")%>%
+  filter(rate.type=="NP")%>%
+  filter(light_dark=="light")
+  
+
+#calculation you will need 
+schoolfield_high <- function(lnc, E, Eh, Th, temp, Tc) {
+  Tc <- 273.15 + Tc
+  k <- 8.62e-5
+  boltzmann.term <- lnc + log(exp(E/k*(1/Tc - 1/temp)))
+  inactivation.term <- log(1/(1 + exp(Eh/k*(1/Th - 1/temp))))
+  return(boltzmann.term + inactivation.term)
+}
+
+
+#--------ONLY ONE TREATMENT GROUP HERE-------------
+#--fit models
+
+
+fit2 <- nls_multstart(ln.rate ~ schoolfield_high(lnc, E, Eh, Th, temp = K, Tc = 27),
+                     data = test.df,
+                     iter = 500,
+                     start_lower = c(lnc = -10, E = 0.1, Eh = 0.2, Th = 285),
+                     start_upper = c(lnc = 10, E = 2, Eh = 5, Th = 330),
+                     supp_errors = 'Y',
+                     na.action = na.omit,
+                     lower = c(lnc = -10, E = 0, Eh = 0, Th = 0))
+print(fit2)
+
+#--get predictions
+library(broom)
+# broom functions to tidy up model
+params <- tidy(fit2) #parameter estimates from model but IDT we use these at all
+preds <- augment(fit2)
+
+#--add predictions to our working dataframe
+test.df%<>%
+  mutate(fitted=preds$.fitted,
+         residuals=preds$.resid)
+
+#--plot with predictions
+pp<-ggplot() +
+  geom_point(data=test.df, aes(x=(K - 273.15), y=ln.rate, colour=rate.type)) +
+  geom_line(data=test.df, aes(x=(K - 273.15), y=fitted, colour=rate.type)) +
+  ylab('log Metabolic rate') +
+  xlab('Temperature (ºC)') +
+  theme_bw(base_size = 12, base_family = 'Helvetica')+
+  xlim(0)#+
+  facet_wrap(~species)
+esquisse:::ggplot_to_ppt("pp")
+
+#--boot strap to get confidence intervals
+library(purrr)
+fit_boots <- test.df %>% 
+  modelr::bootstrap(n = 200, id = 'boot_num') %>%
+  group_by(boot_num) %>%
+  mutate(fit = map(strap, ~nls_multstart(ln.rate ~ schoolfield_high(lnc, E, Eh, Th, temp = K, Tc = 20),
+                                         data = data.frame(.),
+                                         iter = 100,
+                                         start_lower = c(lnc = -10, E = 0.1, Eh = 0.2, Th = 285),
+                                         start_upper = c(lnc = 10, E = 2, Eh = 5, Th = 330),
+                                         lower = c(lnc=-10, E=0, Eh=0, Th=0),
+                                         supp_errors = 'Y')
+  ))
+
+fit_boots
+
+
+# get parameters--but we dont really need these 
+params_boot <- fit_boots %>%
+  unnest(fit %>% map(tidy)) %>%
+  ungroup()
+
+# get predictions
+preds_boot <- fit_boots %>%
+  unnest(fit %>% map(augment)) %>%
+  ungroup()
+
+#graph with lots of lines representing CI 
+ggplot() +
+  geom_line(data=preds_boot, aes(x=K - 273.15, y=.fitted, group = boot_num),  alpha = .03) + #these are the light grey lines representing confidence intervals
+  geom_point(data=test.df, aes(x=(K - 273.15), y=ln.rate, colour=rate.type)) + #raw data 
+  geom_line(data=test.df, aes(x=(K - 273.15), y=fitted, colour=rate.type)) + #original fitted line
+  ylab('log Metabolic rate') +
+  xlab('Temperature (ºC)') +
+  theme_bw(base_size = 12, base_family = 'Helvetica')
+
+#"""this is an alternative way to graph, but we need to first turn those
+#light lines into raw upper and lower confidence intervals"""
+
+# new data frame of predictions
+new_preds <- test.df %>%
+  do(., data.frame(K = seq(min(.$K), max(.$K), length.out = 250), stringsAsFactors = FALSE))
+
+# create smooth predictions for best fit
+preds <- augment(fit2, newdata = new_preds)
+
+# create smoother predictions for bootstrapped replicate
+preds <- fit_boots %>%
+  unnest(fit %>% map(augment, newdata = new_preds)) %>%
+  # group by each value of K and get quantiles
+  group_by(., K) %>%
+  dplyr::summarise(lwr_CI = quantile(.fitted, 0.025),
+            upr_CI = quantile(.fitted, 0.975)) %>%
+  ungroup() %>%
+  merge(., preds, by = 'K')
+
+# plot
+ggplot() +
+  geom_point(data=test.df, aes(x=(K - 273.15), y=ln.rate, colour=rate.type)) + #raw data 
+  geom_line(data=test.df, aes(x=(K - 273.15), y=fitted, colour=rate.type)) + #original fitted line
+  geom_ribbon(data=preds,
+              aes(x=K - 273.15, ymin = lwr_CI, ymax = upr_CI), fill = 'grey', alpha = .2) +
+  ylab('log Metabolic rate') +
+  xlab('Temperature (ºC)') +
+  theme_bw(base_size = 12, base_family = 'Helvetica') +
+  ggtitle('Single TPC with confidence intervals')
+  
+########------End- one curve-----##########
+ #----------Make curves for all groups-------
+ #Schoolfield equation
+ #
+#calculation you will need 
+schoolfield_high <- function(lnc, E, Eh, Th, temp, Tc) {
+  Tc <- 273.15 + Tc
+  k <- 8.62e-5
+  boltzmann.term <- lnc + log(exp(E/k*(1/Tc - 1/temp)))
+  inactivation.term <- log(1/(1 + exp(Eh/k*(1/Th - 1/temp))))
+  return(boltzmann.term + inactivation.term)
+}
+
+#step one subset data: first make subsets for all of your treatment groups
+#-----subset data--------
+
+#by species
+DLAB.df<-mydata%>%
+  dplyr::filter(species=="DLAB")
+
+MCAV.df<-mydata%>%
+  filter(species=="MCAV")
+
+PAST.df<-mydata%>%
+  filter(species=="PAST")
+
+OFRA.df<-mydata%>%
+  filter(species=="OFRA")
+
+#by Rate.Type
+#-------DLAB-------
+DLAB.DF.GP<-DLAB.df%>%
+  filter(rate.type=="GP")
+
+DLAB.DF.R<-DLAB.df%>%
+  filter(rate.type=="R")
+#-------MCAV-------
+MCAV.DF.GP<-MCAV.df%>%
+  filter(rate.type=="GP")
+
+MCAV.DF.R<-MCAV.df%>%
+  filter(rate.type=="R")
+#-------PAST-------
+PAST.DF.GP<-PAST.df%>%
+  filter(rate.type=="GP")
+
+PAST.DF.R<-PAST.df%>%
+  filter(rate.type=="R")
+#-------OFRA-------
+OFRA.DF.GP<-OFRA.df%>%
+  filter(rate.type=="GP")
+
+OFRA.DF.R<-OFRA.df%>%
+  filter(rate.type=="R")
+
+#-finally by treatment
+#-------DLAB-------
+DLAB.DF.GP.deep<-DLAB.DF.GP%>%
+  filter(treatment=="deep")
+
+DLAB.DF.GP.shallow<-DLAB.DF.GP%>%
+  filter(treatment=="shallow")
+
+DLAB.DF.R.deep<-DLAB.DF.R%>%
+  filter(treatment=="deep")
+
+DLAB.DF.R.shallow<-DLAB.DF.R%>%
+  filter(treatment=="shallow")
+#-------MCAV-------
+MCAV.DF.GP.deep<-MCAV.DF.GP%>%
+  filter(treatment=="deep")
+
+MCAV.DF.GP.shallow<-MCAV.DF.GP%>%
+  filter(treatment=="shallow")
+
+MCAV.DF.R.deep<-MCAV.DF.R%>%
+  filter(treatment=="deep")
+
+MCAV.DF.R.shallow<-MCAV.DF.R%>%
+  filter(treatment=="shallow")
+#-------PAST-------
+PAST.DF.GP.deep<-PAST.DF.GP%>%
+  filter(treatment=="deep")
+
+PAST.DF.GP.shallow<-PAST.DF.GP%>%
+  filter(treatment=="shallow")
+
+PAST.DF.R.deep<-PAST.DF.R%>%
+  filter(treatment=="deep")
+
+PAST.DF.R.shallow<-PAST.DF.R%>%
+  filter(treatment=="shallow")
+#-------OFRA-------
+OFRA.DF.GP.deep<-OFRA.DF.GP%>%
+  filter(treatment=="deep")
+
+OFRA.DF.GP.shallow<-OFRA.DF.GP%>%
+  filter(treatment=="shallow")
+
+OFRA.DF.R.deep<-OFRA.DF.R%>%
+  filter(treatment=="deep")
+
+OFRA.DF.R.shallow<-OFRA.DF.R%>%
+  filter(treatment=="shallow")
+
+#-------calculate parameter estimates per genotype-------
+#Step one: make empty DF to fill with fitted values and run function
+##"""it is very important to empty the dataframes before running the function multiple times"""
+
+All.fitted<-data.frame()#create an empty df to fill with fitted values
+All.CI<-data.frame()#create an empty df. to fill with confidence intervals
+
+mult.fit.curves<-function(Data){
+  fit2 <- nls_multstart(ln.rate ~ schoolfield_high(lnc, E, Eh, Th, temp = K, Tc = 27),
+                        data = Data,
+                        iter = 500,
+                        start_lower = c(lnc = -10, E = 0.1, Eh = 0.2, Th = 285),
+                        start_upper = c(lnc = 10, E = 2, Eh = 5, Th = 330),
+                        supp_errors = 'Y',
+                        na.action = na.omit,
+                        lower = c(lnc = -10, E = 0, Eh = 0, Th = 0))
+  #print(fit2)
+  preds <- augment(fit2)
+  Data%<>%
+    mutate(fitted=preds$.fitted,
+           residuals=preds$.resid)
+  
+  All.fitted<<-rbind(All.fitted,Data)
+  
+  fit_boots <- Data %>% 
+    modelr::bootstrap(n = 10, id = 'boot_num') %>% #change the number for more straps
+    group_by(boot_num) %>%
+    mutate(fit = map(strap, ~nls_multstart(ln.rate ~ schoolfield_high(lnc, E, Eh, Th, temp = K, Tc = 27),
+                                           data = data.frame(.),
+                                           iter = 100,
+                                           start_lower = c(lnc = -10, E = 0.1, Eh = 0.2, Th = 285),
+                                           start_upper = c(lnc = 10, E = 2, Eh = 5, Th = 330),
+                                           lower = c(lnc=-10, E=0, Eh=0, Th=0),
+                                           supp_errors = 'Y')
+    ))
+  fit_boots
+  
+  # get predictions
+  preds_boot <- fit_boots %>%
+    unnest(fit %>% map(augment)) %>%
+    ungroup()
+  
+  new_preds <- Data %>%
+    do(., data.frame(K = seq(min(.$K), max(.$K), length.out = 250), stringsAsFactors = FALSE))
+  
+  preds <- augment(fit2, newdata = new_preds)
+  
+  df.species<-(Data$species[1])
+  df.treatment<-(Data$treatment[1])
+  df.rate.type<-(Data$rate.type[1])
+  df.genotype<-(Data$genotype[1])
+  
+  preds <- fit_boots %>%
+    unnest(fit %>% map(augment, newdata = new_preds)) %>%
+    # group by each value of K and get quantiles
+    group_by(., K) %>%
+    summarise(lwr_CI = quantile(.fitted, 0.025),
+              upr_CI = quantile(.fitted, 0.975)) %>%
+    ungroup() %>%
+    merge(., preds, by = 'K')%>%
+    mutate(species=factor(df.species),
+           treatment=factor(df.treatment),
+           rate.type=factor(df.rate.type))
+  All.CI<<-rbind(All.CI, preds)
+}
+#"""it is very important to empty the dataframes before running the function multiple times"""
+
+
+#-----put all the subsetted data through the function--------
+#First run all of these and get All.fitted. and All. CI
+#DLAB
+mult.fit.curves(DLAB.DF.GP.deep)
+mult.fit.curves(DLAB.DF.GP.shallow)
+mult.fit.curves(DLAB.DF.R.deep)
+mult.fit.curves(DLAB.DF.R.shallow)
+#MCAV
+mult.fit.curves(MCAV.DF.GP.deep)
+mult.fit.curves(MCAV.DF.GP.shallow)
+mult.fit.curves(MCAV.DF.R.deep)
+mult.fit.curves(MCAV.DF.R.shallow)
+#PAST
+mult.fit.curves(PAST.DF.GP.deep)
+mult.fit.curves(PAST.DF.GP.shallow)
+mult.fit.curves(PAST.DF.R.deep)
+mult.fit.curves(PAST.DF.R.shallow)
+#OFRA
+mult.fit.curves(OFRA.DF.GP.deep)
+mult.fit.curves(OFRA.DF.GP.shallow)
+mult.fit.curves(OFRA.DF.R.deep)
+mult.fit.curves(OFRA.DF.R.shallow)
+
+
+#----Graph the outputs--------
+#graph with your wobbly predictions
+All.fitted%<>%
+  mutate(group=factor(paste(treatment,rate.type)))
+
+All.CI%<>%
+  mutate(group=factor(paste(treatment,rate.type)))
+
+
+
+TPCall<-ggplot() +
+  geom_ribbon(data=subset(All.CI, lwr_CI>0),
+              aes(x=K - 273.15, ymin = lwr_CI, ymax = upr_CI, group=group),fill = 'grey', alpha = .4) +
+  geom_point(data=All.fitted, aes(x=(K - 273.15), y=ln.rate, shape=treatment)) +
+  geom_line(data=All.fitted, aes(x=(K - 273.15), y=fitted, colour=group)) +
+  ylab('log Metabolic rate') +
+  xlab('Temperature (ºC)') +
+  theme_bw(base_size = 12, base_family = 'Helvetica') +
+  facet_wrap(~species)
+
+#-----Save plot in PP-------##
+library(esquisse)
+library(rvg)
+####
+
+
+esquisse:::ggplot_to_ppt("TPCall")
+
+#graph using a smoothing function
+STPCall<-ggplot() +
+  geom_ribbon(data=subset(All.CI, lwr_CI>0),aes(x=K - 273.15, ymin = lwr_CI, ymax = upr_CI, group=group),fill = 'grey', alpha = .4) +
+  geom_point(data=All.fitted, aes(x=(K - 273.15), y=ln.rate, shape=treatment)) +
+  geom_smooth(data=All.fitted, aes(x=(K - 273.15), y=fitted, colour=group,se=F)) +
+  ylab('log Metabolic rate') +
+  xlab('Temperature (ºC)') +
+  theme_bw(base_size = 12, base_family = 'Helvetica') +
+  facet_wrap(~species)
+
+esquisse:::ggplot_to_ppt("STPCall")
+
+
+
+#graph using a smoothing function and fancy up this graphical representation of biological processes
+TPC<-ggplot() +
+  geom_ribbon(data=subset(All.CI, lwr_CI>0),aes(x=K - 273.15, ymin = lwr_CI, ymax = upr_CI, group=group),fill = 'grey', alpha = .4) +
+  geom_point(data=All.fitted, aes(x=(K - 273.15), y=ln.rate, shape=treatment)) +
+  geom_smooth(data=All.fitted, aes(x=(K - 273.15), y=fitted, colour=group,se=F)) +
+  ylab('log Metabolic rate') +
+  xlab('Temperature (ºC)') +
+  facet_wrap(~species)+
+  theme_classic()+
+  labs(title="Thermal Performance Curves Across Depth")
+
+
+#TPC + theme(legend.position = "right")+
+ # panel.grid.major.y=element_blank())
+
+esquisse:::ggplot_to_ppt("TPC")
+
+#### How to find Cmin and Cmax
+
+###------Blank the All.parameters to get subsetted data to genotype for Topt calculation and ANOVA comparison-----
+
+#----run this second to get parameters for each genotype
+All.parameters<-data.frame()#create an empty df to fill with calculated parameters
+
+
+mult.fit.curves2<-function(Data){
+  fit2 <- nls_multstart(ln.rate ~ schoolfield_high(lnc, E, Eh, Th, temp = K, Tc = 27),
+                        data = Data,
+                        iter = 500,
+                        start_lower = c(lnc = -10, E = 0.1, Eh = 0.2, Th = 285),
+                        start_upper = c(lnc = 10, E = 2, Eh = 5, Th = 330),
+                        supp_errors = 'Y',
+                        na.action = na.omit,
+                        lower = c(lnc = -10, E = 0, Eh = 0, Th = 0))
+  #print(fit2)
+  params <- tidy(fit2)
+
+  params%<>%
+    mutate(species=Data$species[1],
+           Treatment=Data$treatment[1],
+           rate.type=Data$rate.type[1],
+          genotype= Data$fragment.ID2[1])
+  print(params)
+  All.parameters<<-rbind(params, All.parameters)
+}
+
+#DLAB- 3 genotypes per site (shallow and dark) grouped by photosynthesis and then by respiration
+#individual 1-3
+mult.fit.curves2(subset(DLAB.DF.GP.deep, fragment.ID2=="ML1_light"))
+mult.fit.curves2(subset(DLAB.DF.GP.deep, fragment.ID2=="ML2_light"))
+mult.fit.curves2(subset(DLAB.DF.GP.deep, fragment.ID2=="ML3_light"))
+
+mult.fit.curves2(subset(DLAB.DF.GP.shallow, fragment.ID2=="SL1_light"))
+mult.fit.curves2(subset(DLAB.DF.GP.shallow, fragment.ID2=="SL2_light"))
+mult.fit.curves2(subset(DLAB.DF.GP.shallow, fragment.ID2=="SL3_light"))
+
+mult.fit.curves2(subset(DLAB.DF.R.deep, fragment.ID2=="ML1_dark"))
+mult.fit.curves2(subset(DLAB.DF.R.deep, fragment.ID2=="ML2_dark"))
+mult.fit.curves2(subset(DLAB.DF.R.deep, fragment.ID2=="ML3_dark"))
+
+mult.fit.curves2(subset(DLAB.DF.R.shallow, fragment.ID2=="SL1_dark"))
+mult.fit.curves2(subset(DLAB.DF.R.shallow, fragment.ID2=="SL2_dark"))
+mult.fit.curves2(subset(DLAB.DF.R.shallow, fragment.ID2=="SL3_dark"))
+
+#MCAV
+mult.fit.curves2(subset(MCAV.DF.GP.deep, fragment.ID2=="MC1_light"))
+mult.fit.curves2(subset(MCAV.DF.GP.deep, fragment.ID2=="MC2_light"))
+mult.fit.curves2(subset(MCAV.DF.GP.deep, fragment.ID2=="MC3_light"))
+
+mult.fit.curves2(subset(MCAV.DF.GP.shallow, fragment.ID2=="SC1_light"))
+mult.fit.curves2(subset(MCAV.DF.GP.shallow, fragment.ID2=="SC2_light"))
+mult.fit.curves2(subset(MCAV.DF.GP.shallow, fragment.ID2=="SC3_light"))
+
+mult.fit.curves2(subset(MCAV.DF.R.deep, fragment.ID2=="MC1_dark"))
+mult.fit.curves2(subset(MCAV.DF.R.deep, fragment.ID2=="MC2_dark"))
+mult.fit.curves2(subset(MCAV.DF.R.deep, fragment.ID2=="MC3_dark"))
+
+mult.fit.curves2(subset(MCAV.DF.R.shallow, fragment.ID2=="SC1_dark"))
+mult.fit.curves2(subset(MCAV.DF.R.shallow, fragment.ID2=="SC2_dark"))
+mult.fit.curves2(subset(MCAV.DF.R.shallow, fragment.ID2=="SC3_dark"))
+
+#PAST
+mult.fit.curves2(subset(PAST.DF.GP.deep, fragment.ID2=="MA1_light"))
+mult.fit.curves2(subset(PAST.DF.GP.deep, fragment.ID2=="MA2_light"))
+mult.fit.curves2(subset(PAST.DF.GP.deep, fragment.ID2=="MA3_light"))
+
+mult.fit.curves2(subset(PAST.DF.GP.shallow, fragment.ID2=="SA1_light"))
+mult.fit.curves2(subset(PAST.DF.GP.shallow, fragment.ID2=="SA2_light"))
+mult.fit.curves2(subset(PAST.DF.GP.shallow, fragment.ID2=="SA3_light"))
+
+mult.fit.curves2(subset(PAST.DF.R.deep, fragment.ID2=="MA1_dark"))
+mult.fit.curves2(subset(PAST.DF.R.deep, fragment.ID2=="MA2_dark"))
+mult.fit.curves2(subset(PAST.DF.R.deep, fragment.ID2=="MA3_dark"))
+
+mult.fit.curves2(subset(PAST.DF.R.shallow, fragment.ID2=="SA1_dark"))
+mult.fit.curves2(subset(PAST.DF.R.shallow, fragment.ID2=="SA2_dark"))
+mult.fit.curves2(subset(PAST.DF.R.shallow, fragment.ID2=="SA3_dark"))
+
+
+#OFRA
+mult.fit.curves2(subset(OFRA.DF.GP.deep, fragment.ID2=="MF1_light"))
+mult.fit.curves2(subset(OFRA.DF.GP.deep, fragment.ID2=="MF2_light"))
+mult.fit.curves2(subset(OFRA.DF.GP.deep, fragment.ID2=="MF3_light"))
+
+mult.fit.curves2(subset(OFRA.DF.GP.shallow, fragment.ID2=="SF1_light"))
+mult.fit.curves2(subset(OFRA.DF.GP.shallow, fragment.ID2=="SF2_light"))
+mult.fit.curves2(subset(OFRA.DF.GP.shallow, fragment.ID2=="SF3_light"))
+
+mult.fit.curves2(subset(OFRA.DF.R.deep, fragment.ID2=="MF1_dark"))
+mult.fit.curves2(subset(OFRA.DF.R.deep, fragment.ID2=="MF2_dark"))
+mult.fit.curves2(subset(OFRA.DF.R.deep, fragment.ID2=="MF3_dark"))
+
+mult.fit.curves2(subset(OFRA.DF.R.shallow, fragment.ID2=="SF1_dark"))
+mult.fit.curves2(subset(OFRA.DF.R.shallow, fragment.ID2=="SF2_dark"))
+mult.fit.curves2(subset(OFRA.DF.R.shallow, fragment.ID2=="SF3_dark"))
+
+
+# plot mean of parameters  across all genotypes (not very attractive)
+MeanParams<-left_join(All.CI, All.parameters)
+View(MeanParams)
+
+para<-ggplot(MeanParams, aes(col = rate.type)) +
+  geom_point(aes(genotype, estimate)) +
+  facet_wrap(~ term, scale = 'free_x', ncol = 4) +
+  geom_linerange(aes(genotype, ymin = lwr_CI, ymax = upr_CI)) +
+  coord_flip() +
+  scale_color_manual(values = c('green4', 'black')) +
+  theme_bw(base_size = 12, base_family = 'Helvetica') +
+  theme(legend.position = 'top') +
+  xlab('curve') +
+  ylab('parameter estimate')#+
+  facet_wrap(rate.type)
+
+library(ggplot2)
+
+
+esquisse:::ggplot_to_ppt("para")
+
+
+          ####
+          ####
+#-------Visualize and fit to linear model----
+#library(car)
+#library(lme4)
+#library(stats)
+##library(Rmisc)
+#library(Hmisc)
+
+
+#visualize groups GP
+#GPbT<-ggplot(subset(topt_data,rate.type=="GP"), aes(x=Treatment, topt_C, colour=species, shape=Treatment))+
+#  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+#  geom_point(size=4)+
+#  ylab("Topt (ºC)")+
+#  labs(title="Photosynthesis Topt by Treatment")+
+#  coord_flip()
+#
+#esquisse:::ggplot_to_ppt("GPbT")
+#
+#GPbS<-ggplot(subset(topt_data,rate.type=="GP"), aes(x=species, topt_C, colour=species, shape=Treatment))+
+#  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+#  geom_point(size=4)+
+#  ylab("Topt (ºC)")+
+#  labs(title="Photosynthesis Topt by species")+
+#  coord_flip()
+#
+#esquisse:::ggplot_to_ppt("GPbS")
+#
+#ggplot(subset(topt_data,rate.type=="GP"), aes(x=Treatment, topt_C, colour=Treatment))+
+#  geom_boxplot()+
+#  geom_point()
+#
+#ggplot(subset(topt_data,rate.type=="GP"), aes(x=species, topt_C, colour=species))+
+#  geom_boxplot()+
+#  geom_point()
+#
+#
+#
+##linear model
+#Topt.modGP<-Anova(lm(topt_C~Treatment+species, data=subset(topt_data,rate.type=="GP")))
+#summary(Topt.modGP)
+#
+##check for normality, use normality plots
+#Topt.mod2 <- lm(topt_C~Treatment+species, data=subset(topt_data,rate.type=="GP"))
+#
+#
+##do I need to do this?
+##qqnorm(resid(All.fitted$fitted))
+##qqline(resid(All.fitted$fitted))
+#
+#
+##check heteroscisity with boxplots
+#
+##boxplot(resid(Topt.mod)~Topt_data$treatment*Topt_data$rate.type)
+#
+############
+#Anova(lm(topt_C~Treatment+species, data=subset(topt_data,rate.type=="GP")))
+#
+#m1<-aov(topt_C~Treatment+species, data=subset(topt_data,rate.type=="GP"))
+#TukeyHSD(m1, "Treatment")
+#TukeyHSD(m1, "species")
+#
+##visualize groups R
+#ggplot(subset(topt_data,rate.type=="R"), aes(x=Treatment, topt_C, colour=Treatment))+
+#  geom_boxplot()+
+#  geom_point()
+#
+#ggplot(subset(topt_data,rate.type=="R"), aes(x=species, topt_C, colour=species))+
+#  geom_boxplot()+
+#  geom_point()
+#
+#
+#RbTB<-ggplot(subset(topt_data,rate.type=="R"), aes(x=Treatment, topt_C, colour=Treatment))+
+#  geom_boxplot()+
+#  geom_point()+
+#  ylab("Topt (ºC)")+
+#  labs(title="Repiration Topt by Treatment")
+#esquisse:::ggplot_to_ppt("RbTB")
+#
+#RbT<-ggplot(subset(topt_data,rate.type=="R"), aes(x=Treatment, topt_C, colour=species, shape=Treatment))+
+#  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+#  geom_point(size=4)+
+#  ylab("Topt (ºC)")+
+#  labs(title="Photosynthesis Topt by species")+
+#  coord_flip()
+#
+#esquisse:::ggplot_to_ppt("GPbS")
+#
+#
+#
+#ggplot(subset(topt_data,rate.type=="R"), aes(x=species, topt_C, colour=species, shape=Treatment))+
+#  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+#  geom_point(size=4)
+#
+##linear model
+#Anova(lm(topt_C~Treatment+species, data=subset(topt_data,rate.type=="R")))
+#
+#m2<-aov(topt_C~Treatment+species, data=subset(topt_data,rate.type=="R"))
+#TukeyHSD(m2, "Treatment")
+#TukeyHSD(m2, "species")
+#
+##-------linear models does treatment or species lnc----
+##visualize groups GP
+#ggplot(subset(topt_data,rate.type=="GP"), aes(x=Treatment, lnc, colour=Treatment))+
+#  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+#  geom_point(size=4)
+#
+#ggplot(subset(topt_data,rate.type=="GP"), aes(x=species, lnc, colour=species))+
+#  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+#  geom_point(size=4)
+#
+#
+#
+##linear model
+#Anova(lm(lnc~Treatment+species, data=subset(topt_data,rate.type=="GP")))
+#
+#m3<-aov(lnc~Treatment+species, data=subset(topt_data,rate.type=="GP"))
+#TukeyHSD(m3, "Treatment")
+#TukeyHSD(m3, "species")
+#
+##visualize groups R
+#ggplot(subset(topt_data,rate.type=="R"), aes(x=Treatment, lnc, colour=Treatment))+
+#  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+#  geom_point(size=4)
+#
+#
+#ggplot(subset(topt_data,rate.type=="R"), aes(x=species, lnc, colour=species))+
+#  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+#  geom_point(size=4)
+#
+#
+#
+#
+##linear model
+#Anova(lm(lnc~Treatment+species, data=subset(topt_data,rate.type=="R")))
+#
+#m4<-aov(lnc~Treatment+species, data=subset(topt_data,rate.type=="R"))
+#TukeyHSD(m4, "Treatment")
+#TukeyHSD(m4, "species")
+############3right here#########3-------------
+############
+############
+
+#48 GROUPS
+#192 ESTIAMTES (4 x 48)
+#------T opt from parameters-------
+get_topt<-function(E, Th, Eh){
+  return((Eh*Th)/(Eh+(8.62e-05*Th*(log((Eh/E))-1))))
+}
+
+topt_data<-All.parameters
+
+topt_data<-All.parameters%>%
+  select(Species, rate.type, Treatment, genotype, estimate, term)%>%
+  group_by(Species, rate.type, Treatment, genotype)%>%
+  spread(term,estimate)
+
+topt_data$topt<-get_topt(E=topt_data$E, Th=topt_data$Th, Eh=topt_data$Eh)
+
+topt_data$topt_C<-topt_data$topt-273.15
+
+
+write.csv(topt_data,'C:/Users/gould054/Documents/TPC_BDA/AllDataAnalysis_Presens_TPC_params/TPC_params_estimates_Topt/Saved datasheets from Script/FinalToptestimates_genotype.csv') 
+
+
+#-------linear Models does treatment or species affect Topt----
+library(car)
+library(lme4)
+library(stats)
+library(Rmisc)
+library(Hmisc)
+
+# alter topt_data to exclude negative Topts- removes 7 data points
+topt_data_thin<- topt_data
+
+write.csv(topt_data_thin, "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/June 2019/TPC_RawData/topt_data_thin.csv")
+
+
+topt_noneg<-topt_data_thin%>%
+  filter(topt_C >0)
+
+#write.csv(topt_noneg,'C:/Users/gould054/Documents/TPC_BDA/AllDataAnalysis_Presens_TPC_params/TPC_params_estimates_Topt/Saved datasheets from Script/FinalToptestimatesNONEG_genotype.csv')
+#ALTER
+write.csv(topt_noneg, "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/June 2019/TPC_RawData/topt_noneg.csv")
+
+#topt_noneg<- read.csv("C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/June 2019/TPC_RawData/topt_noneg.csv")
+#topt_data_thin<-read.csv("C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/June 2019/TPC_RawData/topt_data_thin.csv")
+
+# plot distribution of Topt ##### ------ Parameter graphs--- 
+Toptmeans<-ggplot(topt_noneg, aes(topt_C)) +
+  geom_histogram(col = 'black', fill = 'white') +
+  facet_wrap(~rate.type)+
+  xlab('Optimum Temperature (ºC)') +
+  ggtitle('Distribution of optimum temperatures')
+
+esquisse:::ggplot_to_ppt("Toptmeans")
+
+
+
+# plot distribution of estimated parameters E, Eh, lnc, Th
+p1 <- ggplot(topt_noneg, aes(E)) +
+  geom_histogram(col = 'black', fill = 'white') +
+  facet_wrap(~ rate.type, scales = 'free_x')
+p1
+esquisse:::ggplot_to_ppt("p1")
+# plot distribution of estimated parameters E, Eh, lnc, Th
+p2 <- ggplot(topt_noneg, aes(Eh)) +
+  geom_histogram(col = 'black', fill = 'white') +
+  facet_wrap(~ rate.type, scales = 'free_x')
+p2
+esquisse:::ggplot_to_ppt("p2")
+
+# plot distribution of estimated parameters E, Eh, lnc, Th
+p3 <- ggplot(topt_noneg, aes(lnc)) +
+  geom_histogram(col = 'black', fill = 'white') +
+  facet_wrap(~ rate.type)
+p3
+esquisse:::ggplot_to_ppt("p3")
+
+# plot distribution of estimated parameters E, Eh, lnc, Th
+p4 <- ggplot(topt_noneg, aes(Th)) +
+  geom_histogram(col = 'black', fill = 'white') +
+  facet_wrap(~ rate.type)
+p4
+esquisse:::ggplot_to_ppt("p4")
+
+# plot distribution of estimated parameters E, Eh, lnc, Th by species
+# 
+p6 <- ggplot(topt_noneg, aes(E)) +
+  geom_histogram(col = 'black', fill = 'white') +
+  facet_wrap(~ species, scales = 'free_x')
+p6
+esquisse:::ggplot_to_ppt("p6")
+# plot distribution of estimated parameters E, Eh, lnc, Th
+p7 <- ggplot(topt_noneg, aes(Eh)) +
+  geom_histogram(col = 'black', fill = 'white') +
+  facet_wrap(~ species, scales = 'free_x')
+p7
+esquisse:::ggplot_to_ppt("p7")
+
+# plot distribution of estimated parameters E, Eh, lnc, Th
+p8 <- ggplot(topt_noneg, aes(lnc)) +
+  geom_histogram(col = 'black', fill = 'white') +
+  facet_wrap(~ species)
+p8
+esquisse:::ggplot_to_ppt("p8")
+
+# plot distribution of estimated parameters E, Eh, lnc, Th 
+p5 <- ggplot(topt_noneg, aes(Th)) +
+  geom_histogram(col = 'black', fill = 'white') +
+  facet_wrap(~ species)
+p5
+esquisse:::ggplot_to_ppt("p5")
+
+
+
+meanDF2<-summary(topt_noneg)
+View(meanDF2)
+summary(topt_noneg)
+
+str(topt_noneg)
+
+
+### Table of Averages per Species
+
+topt_nonegAVG<-topt_noneg
+
+topt_nonegAVG$avgE<-topt_nonegAVG$E
+
+
+
+#visualize groups GP
+GPtbT<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=Treatment, topt_C, colour=species, shape=Treatment))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Topt (ºC)")+
+  labs(title="Mean Topt across Depth (GP)")+
+  coord_flip()
+GPtbT
+esquisse:::ggplot_to_ppt("GPtbT")
+
+GPtbS<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=species, topt_C, colour=species, shape=Treatment))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Topt ºC)")+
+  labs(title="Mean Topt across species (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("GPtbS")
+
+library(car)
+
+#linear model
+gp.mod<-Anova(lm(topt_C~Treatment+species, data=subset(topt_noneg,rate.type=="GP")))
+summary(gp.mod)
+gp.mod
+
+ 
+# No significant differnece in Topt across treatment or species
+m1N<-aov(topt_C~Treatment+species, data=subset(topt_noneg,rate.type=="GP"))
+TukeyHSD(m1N, "Treatment")
+TukeyHSD(m1N, "species")
+TukeyHSD(m1N)
+summary(m1N)
+
+
+
+visualize groups R
+
+RTopt<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=Treatment, topt_C, colour=Treatment))+
+  geom_boxplot()+
+  geom_point()+
+  ylab("Topt (ºC)")
+
+esquisse:::ggplot_to_ppt("RTopt")
+
+RtoptS<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=species, topt_C, colour=species))+
+  geom_boxplot()+
+  geom_point()+
+  ylab("Topt (ºC)")
+esquisse::ggplot_to_ppt("RtoptS")
+
+RtbT<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=Treatment, topt_C, colour=species, shape=Treatment))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Topt (ºC)")+
+  labs(title="Mean Topt across Depth (R)")+
+  coord_flip()
+
+esquisse:::ggplot_to_ppt("RtbT")
+
+RtbS<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=species, topt_C, colour=species, shape=Treatment))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Topt (ºC)")+
+  labs(title="Mean Topt across species (R)")+
+  coord_flip()
+
+esquisse:::ggplot_to_ppt("RtbS")
+
+
+#linear model
+R.mod<-Anova(lm(topt_C~Treatment+species, data=subset(topt_noneg,rate.type=="R")))
+summary(R.mod)
+R.mod
+
+
+m2N<-aov(topt_C~Treatment+species, data=subset(topt_noneg,rate.type=="R")) #treatment significant (PAST) 0.0108
+TukeyHSD(m2N, "Treatment")
+TukeyHSD(m2N, "species")
+TukeyHSD(m2N)
+
+
+m2PAST<-aov(topt_C~Treatment, data=subset(topt_noneg,species=="PAST")) # treatment significant across depth for PAST 0.0234
+summary(m2PAST)
+TukeyHSD(m2PAST, "Treatment")
+
+#-------linear models does treatment or species lnc----
+#visualize groups GPs
+GPtLT<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=Treatment, lnc, Shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("lnc")+
+  labs(title="Mean lnc across Depth (GP)")+
+  coord_flip()
+
+esquisse:::ggplot_to_ppt("GPtLT")
+
+GPtbLT<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=Treatment, lnc, colour=species, shape=Treatment))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("lnc")+
+  labs(title="Mean lnc across Depth (GP)")+
+  coord_flip()
+
+
+esquisse:::ggplot_to_ppt("GPtbLT")
+
+GPtbS<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=species, lnc, colour=species,shape=Treatment))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("lnc")+
+  labs(title="Mean lnc across species (GP)")+
+  coord_flip()
+
+esquisse:::ggplot_to_ppt("GPtbS")
+
+
+#linear model
+IncGP.mod<-Anova(lm(lnc~Treatment+species, data=subset(topt_noneg,rate.type=="GP")))
+summary(IncGP.mod)
+IncGP.mod
+
+m3N<-aov(lnc~Treatment+species, data=subset(topt_noneg,rate.type=="GP"))
+TukeyHSD(m3N, "Treatment")
+TukeyHSD(m3N, "species")
+TukeyHSD(m3N)
+m3N
+
+Anova(lm(lnc~Treatment, data=subset(topt_noneg,rate.type=="GP")))
+m3NSP<-aov(lnc~species, data=subset(topt_noneg,rate.type=="GP"))
+TukeyHSD(m3NSP, "species")
+#visualize groups R
+RtbLT<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=Treatment, lnc, shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("lnc")+
+  labs(title="Mean lnc across Depth (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("RtbLT")
+
+
+RtbLS<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=species, lnc, shape=Treatment,colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("lnc")+
+  labs(title="Mean lnc across species (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("RtbLS")
+
+ 
+#linear model
+Inc.R.mod<-Anova(lm(lnc~Treatment+species, data=subset(topt_noneg,rate.type=="R")))
+Inc.R.mod
+summary(Inc.R.mod)
+
+m4N<-aov(lnc~Treatment+species, data=subset(topt_noneg,rate.type=="R"))
+TukeyHSD(m4N, "Treatment")
+TukeyHSD(m4N, "species")
+TukeyHSD(m4N)
+summary(m4N)
+
+
+
+
+##### Statistical test for E GP
+
+EGP<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=Treatment, E, shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("E")+
+  labs(title="Mean E across Depth (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("EGP")
+
+
+EsGP<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=species, E, shape=Treatment,colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("E")+
+  labs(title="Mean E across species (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("EsGP")
+
+
+#linear model
+E.GP.mod<-Anova(lm(E~Treatment+species, data=subset(topt_noneg,rate.type=="GP")))
+E.GP.mod
+summary(E.GP.mod)
+
+mEN<-aov(E~Treatment+species, data=subset(topt_noneg,rate.type=="GP"))
+TukeyHSD(mEN)
+summary(mEN)
+
+
+##### Statistical test for E R
+#visualize groups R
+ER<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=Treatment, E, shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("E")+
+  labs(title="Mean E across Depth (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("ER")
+
+
+EsR<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=species, E, shape=Treatment,colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("E")+
+  labs(title="Mean E across species (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("EsR")
+
+
+#linear model
+E.R.mod<-Anova(lm(E~Treatment+species, data=subset(topt_noneg,rate.type=="R")))
+E.R.mod
+summary(E.R.mod)
+
+mER<-aov(E~Treatment+species, data=subset(topt_noneg,rate.type=="R"))
+TukeyHSD(mER)
+summary(mER)
+
+
+##### Statistical test for Eh GP
+
+EhGP<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=Treatment, Eh, shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Eh")+
+  labs(title="Mean Eh across Depth (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("EhGP")
+
+
+EhsGP<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=species, Eh, shape=Treatment,colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Eh")+
+  labs(title="Mean Eh across species (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("EhsGP")
+
+
+#linear model
+Eh.GP.mod<-Anova(lm(Eh~Treatment+species, data=subset(topt_noneg,rate.type=="GP")))
+Eh.GP.mod
+summary(Eh.GP.mod)
+
+mEhN<-aov(Eh~Treatment+species, data=subset(topt_noneg,rate.type=="GP"))
+TukeyHSD(mEhN)
+summary(mEhN)
+
+
+##### Statistical test for Eh R
+#visualize groups R
+EhR<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=Treatment, Eh, shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Eh")+
+  labs(title="Mean Eh across Depth (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("EhR")
+
+
+EhsR<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=species, Eh, shape=Treatment,colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Eh")+
+  labs(title="Mean Eh across species (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("EhsR")
+
+
+#linear model
+Eh.R.mod<-Anova(lm(Eh~Treatment+species, data=subset(topt_noneg,rate.type=="R")))
+Eh.R.mod
+summary(Eh.R.mod)
+
+mEhR<-aov(Eh~Treatment+species, data=subset(topt_noneg,rate.type=="R"))
+TukeyHSD(mEhR)
+summary(mEhR)
+
+
+
+##### Statistical test for Th GP
+
+ThGP<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=Treatment, Th, shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Th")+
+  labs(title="Mean Th across Depth (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("ThGP")
+
+
+ThsGP<-ggplot(subset(topt_noneg,rate.type=="GP"), aes(x=species, Th, shape=Treatment,colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Th")+
+  labs(title="Mean Th across species (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("ThsGP")
+
+
+#linear model
+Th.GP.mod<-Anova(lm(Th~Treatment+species, data=subset(topt_noneg,rate.type=="GP")))
+Th.GP.mod
+summary(Th.GP.mod)
+
+mThN<-aov(Th~Treatment+species, data=subset(topt_noneg,rate.type=="GP"))
+TukeyHSD(mThN)
+summary(mThN)
+
+
+##### Statistical test for Th R
+#visualize groups R
+ThR<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=Treatment, Th, shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Th")+
+  labs(title="Mean Th across Depth (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("ThR")
+
+
+ThsR<-ggplot(subset(topt_noneg,rate.type=="R"), aes(x=species, Th, shape=Treatment,colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Th")+
+  labs(title="Mean Th across species (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("ThsR")
+
+
+#linear model
+Th.R.mod<-Anova(lm(Th~Treatment+species, data=subset(topt_noneg,rate.type=="R")))
+Th.R.mod
+summary(Th.R.mod)
+
+mThR<-aov(Th~Treatment+species, data=subset(topt_noneg,rate.type=="R"))
+TukeyHSD(mThR)
+summary(mThR)
+
+### PMax
+#calculate Pmax values between sites
+## have to make dataframe long format----- FINAL FINAL
+## 
+## 
+
+
+library(readr)
+Pmax2 <- read_csv("C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/2019laptop/FinalPmaxestimatesNONEG_genotype.csv")
+View(Pmax2)
+
+
+Pmax_datatest <- topt_noneg %>%
+  #select(species,  term, estimate, treatment, rate.type) %>%
+  #spread(term, estimate) %>%
+  mutate(Pmax = schoolfield_high(lnc = lnc, E = E, Th = Th, Eh = Eh, temp = topt, Tc = 27)) %>% #add in factors that make up schoolfield function, reference topt to get pmax
+ group_by(., species, rate.type, Treatment, genotype)
+
+
+write.csv(Pmax_datatest, "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/June 2019/TPC_RawData/Pmax_final.csv")
+
+##### PMAX------
+##### Statistical test for Pmax in GP
+#visualize groups R
+
+pmaxtreat<-ggplot(subset(Pmax_datatest,rate.type=="GP"), aes(x=Treatment, Pmax, shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Pmax")+
+  labs(title="Mean Pmax across Depth (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("pmaxtreat")
+
+
+pmaxsp<-ggplot(subset(Pmax_datatest,rate.type=="GP"), aes(x=species, Pmax, shape=Treatment,colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Pmax")+
+  labs(title="Mean Pmax across species (GP)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("pmaxsp")
+
+
+#linear model
+Pmax.GP.mod<-Anova(lm(Pmax~Treatment+species, data=subset(Pmax_datatest,rate.type=="GP")))
+Pmax.GP.mod
+summary(Pmax.GP.mod)
+
+mPGP<-aov(Pmax~Treatment+species, data=subset(Pmax_datatest,rate.type=="GP"))
+TukeyHSD(mPGP)
+summary(mPGP)
+
+##### Statistical test for Pmax in R
+#visualize groups R
+
+pmaxtrR<-ggplot(subset(Pmax_datatest,rate.type=="R"), aes(x=Treatment, Pmax, shape=Treatment, colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Pmax")+
+  labs(title="Mean Pmax across Depth (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("pmaxtrR")
+
+
+pmaxspR<-ggplot(subset(Pmax_datatest,rate.type=="R"), aes(x=species, Pmax, shape=Treatment,colour=species))+
+  stat_summary(fun.data = "mean_cl_boot", colour = "black", size = 2)+
+  geom_point(size=4)+
+  ylab("Pmax")+
+  labs(title="Mean Pmax across species (R)")+
+  coord_flip()
+esquisse:::ggplot_to_ppt("pmaxspR")
+
+
+
+#linear model
+Pmax.R.mod<-Anova(lm(Pmax~Treatment+species, data=subset(Pmax_datatest,rate.type=="R")))
+Pmax.R.mod
+summary(Pmax.R.mod)
+
+mPR<-aov(Pmax~Treatment+species, data=subset(Pmax_datatest,rate.type=="R"))
+TukeyHSD(mPR)
+summary(mPR)
+
+
+#write.csv(Pmax_data,'C:/Users/gould054/Documents/TPC_BDA/AllDataAnalysis_Presens_TPC_params/TPC_params_estimates_Topt/Saved datasheets from Script/FinalPmaxestimatesNONEG_genotype.csv')# ALTER
+
+
+#would be needed if topt is still in K
+#Pmax_data$Topt <- Topt_data$Topt - 273.15
+
+#drop NP don't have NP
+#Pmax_data$rate.type <- droplevels(Pmax_data$rate.type)
+
+#anova function
+Pmax.mod <- lm(Pmax~species*Treatment, data=Pmax_datatest)
+summary(Pmax.mod)
+#check for normality, use normality plots
+
+qqnorm(resid(Pmax.mod))
+qqline(resid(Pmax.mod))
+
+esquisse:::ggplot_to_ppt("NormPLot")
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Pmax.mod)~Pmax_datatest$species*Pmax_datatest$Treatment) 
+
+#high R and low show inconsistent variances, may need to do weighted regression in the future
+
+anova(Pmax.mod)
+summary(Pmax.mod)
+#intercept is significant- the intercept is different from zero
+TukeyHSD(aov(Pmax.mod))
+#compares species across 
+anova(Pmax.mod)
+summary(Pmax.mod)
+TukeyHSD(aov(Pmax.mod))
+
+
+library(magrittr)
+library(plyr)
+library(dplyr)
+
+Pmax.means<-Pmax_datatest %>%
+  group_by(species,Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(Pmax), se=sd(Pmax)/sqrt(n())) #calculates mean and s.e.
+  
+ 
+write.csv(Pmax.means, "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/June 2019/TPC_RawData/Pmax.means_final.csv")
+
+
+
+PMAX_P<-ggplot(Pmax.means, aes(x=rate.type, y=mean, col= species, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), position=position_dodge(width=0.9), width=0.1) +
+  labs(x="Rate Type", y="Maximum Rate of Performance (Pmax)", fill="Treatment", color = "species") 
+
+esquisse:::ggplot_to_ppt("PMAX_P")
+
+PMAX_q<-ggplot(subset(Pmax.means, rate.type=="GP"), aes(x=species, y=mean, col= species, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=4) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), position=position_dodge(width=0.9), width=0.1) +
+  labs(x="Species", y="Maximum Rate of Performance (Pmax) GP", fill="Treatment", color = "species") 
+
+esquisse:::ggplot_to_ppt("PMAX_q")
+
+
+PMAX_R<-ggplot(subset(Pmax.means, rate.type=="R"), aes(x=species, y=mean, col= species, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=4) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), position=position_dodge(width=0.9), width=0.1) +
+  labs(x="Species", y="Maximum Rate of Performance (Pmax) R", fill="Treatment", color = "species") 
+
+esquisse:::ggplot_to_ppt("PMAX_R")
+
+PMAX_P2<-ggplot(Pmax.means, aes(x=rate.type, y=mean, col= Treatment, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=3) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), position=position_dodge(width=1), width=0.5) +
+  labs(x="Rate Type", y="Maximum Rate of Performance (Pmax)", fill="Treatment", color = "Treatment") 
+
+esquisse:::ggplot_to_ppt("PMAX_P2")
+
+ggsave(filename = "thermtol/Output/Pmax_graph.png", device = "png", width = 8, height = 5)
+
+#subset data to compare across species- then genotype
+#by species
+DLAB.dfP<-Pmax_datatest%>%
+  dplyr::filter(species=="DLAB")
+
+MCAV.dfP<-Pmax_datatest%>%
+  filter(species=="MCAV")
+
+PAST.dfP<-Pmax_datatest%>%
+  filter(species=="PAST")
+
+OFRA.dfP<-Pmax_datatest%>%
+  filter(species=="OFRA")
+
+#by Rate.Type
+#-------DLAB-------
+DLAB.DF.GPP<-DLAB.dfP%>%
+  filter(rate.type=="GP")
+
+DLAB.DF.RP<-DLAB.dfP%>%
+  filter(rate.type=="R")
+#-------MCAV-------
+MCAV.DF.GPP<-MCAV.dfP%>%
+  filter(rate.type=="GP")
+
+MCAV.DF.RP<-MCAV.dfP%>%
+  filter(rate.type=="R")
+#-------PAST-------
+PAST.DF.GPP<-PAST.dfP%>%
+  filter(rate.type=="GP")
+
+PAST.DF.RP<-PAST.dfP%>%
+  filter(rate.type=="R")
+#-------OFRA-------
+OFRA.DF.GPP<-OFRA.dfP%>%
+  filter(rate.type=="GP")
+
+OFRA.DF.RP<-OFRA.dfP%>%
+  filter(rate.type=="R")
+
+####### OFRA RESPIRATION -------
+OFRA.DF.RP<-OFRA.dfP%>%
+  filter(rate.type=="R")
+#anova function
+Pmax.modOFRA <- lm(Pmax~Treatment, data=OFRA.DF.RP)
+summary(Pmax.modOFRA)
+#check for normality, use normality plots
+
+qqnorm(resid(Pmax.modOFRA))
+qqline(resid(Pmax.modOFRA))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Pmax.modOFRA)~OFRA.DF.RP$Treatment)
+
+#high R and low show inconsistent variances, may need to do weighted regression in the future
+
+anova(Pmax.modOFRA)
+summary(Pmax.modOFRA)
+TukeyHSD(aov(Pmax.modOFRA))
+
+data.summaryOFRA<-OFRA.DF.RP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(Pmax), se=sd(Pmax)/sqrt(n())) #calculates mean and s.e.
+
+data.summaryOFRA
+
+
+
+PMAX_POFRA<-ggplot(data.summaryOFRA, aes(x=Treatment, y=mean, col= Treatment, group=factor(Treatment))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Maximum Rate of Performance (Pmax) OFRA (R)", fill="Treatment", color = "Treatment") 
+
+PMAX_POFRA
+esquisse:::ggplot_to_ppt("PMAX_POFRA")
+### Topt OFRA
+#anova function
+Topt.modOFRA <- lm(topt_C~Treatment, data=OFRA.DF.RP)
+summary(Topt.modOFRA)
+#check for normality, use normality plots
+
+qqnorm(resid(Topt.modOFRA))
+qqline(resid(Topt.modOFRA))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Topt.modOFRA)~OFRA.DF.RP$Treatment)
+
+#high R and low show inconsistent variances, may need to do weighted regression in the future
+
+anova(Topt.modOFRA)
+summary(Topt.modOFRA)
+TukeyHSD(aov(Topt.modOFRA))
+
+data.summaryTOFRA<-OFRA.DF.RP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(topt_C), se=sd(topt_C)/sqrt(n())) #calculates mean and s.e.
+data.summaryTOFRA
+
+Topt_POFRA<-ggplot(data.summaryTOFRA, aes(x=Treatment, y=mean, col= Treatment, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Thermal Optimum (Topt) OFRA (R)", fill="Treatment", color = "Treatment") 
+
+Topt_POFRA
+esquisse:::ggplot_to_ppt("Topt_POFRA")
+
+
+### GP OFRA
+
+
+#-------OFRA------- PHOTO------
+OFRA.DF.GPP<-OFRA.dfP%>%
+  filter(rate.type=="GP")
+#anova function
+Pmax.modOFRAP <- lm(Pmax~Treatment, data=OFRA.DF.GPP)
+summary(Pmax.modOFRAP)
+#check for normality, use normality plots
+
+qqnorm(resid(Pmax.modOFRAP))
+qqline(resid(Pmax.modOFRAP))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Pmax.modOFRAP)~OFRA.DF.GPP$Treatment)
+
+#high R and low show inconsistent variances, may need to do weighted regression in the future
+
+anova(Pmax.modOFRAP)
+summary(Pmax.modOFRAP)
+TukeyHSD(aov(Pmax.modOFRAP))
+
+data.summaryOFRAGP<-OFRA.DF.GPP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(Pmax), se=sd(Pmax)/sqrt(n())) #calculates mean and s.e.
+data.summaryOFRAGP
+
+
+
+PMAX_POFRAGP<-ggplot(data.summaryOFRAGP, aes(x=Treatment, y=mean, col= Treatment, group=factor(Treatment))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Maximum Rate of Performance (Pmax) OFRA (GP)", fill="Treatment", color = "Treatment") 
+
+PMAX_POFRAGP
+esquisse:::ggplot_to_ppt("PMAX_POFRAGP")
+### Topt OFRA
+#anova function
+Topt.modOFRAGP <- lm(topt_C~Treatment, data=OFRA.DF.GPP)
+summary(Topt.modOFRAGP)
+#check for normality, use normality plots
+
+qqnorm(resid(Topt.modOFRAGP))
+qqline(resid(Topt.modOFRAGP))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Topt.modOFRAGP)~OFRA.DF.GPP$Treatment)
+
+#high R and low show inconsistent variances, may need to do weighted regression in the future
+
+anova(Topt.modOFRAGP)
+summary(Topt.modOFRAGP)
+TukeyHSD(aov(Topt.modOFRAGP))
+
+data.summaryTOFRAGP<-OFRA.DF.GPP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(topt_C), se=sd(topt_C)/sqrt(n())) #calculates mean and s.e.
+data.summaryTOFRAGP
+
+Topt_POFRAGP<-ggplot(data.summaryTOFRAGP, aes(x=Treatment, y=mean, col= Treatment, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Thermal Optimum (Topt) OFRA (GP)", fill="Treatment", color = "Treatment") 
+
+Topt_POFRAGP
+esquisse:::ggplot_to_ppt("Topt_POFRAGP")
+
+
+
+#-------PAST- PHOTOSYNTHESIS------
+PAST.DF.GPP<-PAST.dfP%>%
+  filter(rate.type=="GP")
+
+#anova function
+Pmax.modPASTP <- lm(Pmax~Treatment, data=PAST.DF.GPP)
+summary(Pmax.modPASTP)
+#check for normality, use normality plots
+
+qqnorm(resid(Pmax.modPASTP))
+qqline(resid(Pmax.modPASTP))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Pmax.modPASTP)~PAST.DF.GPP$Treatment)
+
+
+data.summaryPASTGP<-PAST.DF.GPP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(Pmax), se=sd(Pmax)/sqrt(n())) #calculates mean and s.e.
+data.summaryPASTGP
+
+PMAX_PPASTGP<-ggplot(data.summaryPASTGP, aes(x=Treatment, y=mean, col= Treatment, group=factor(Treatment))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Maximum Rate of Performance (Pmax) PAST (GP)", fill="Treatment", color = "Treatment") 
+
+PMAX_PPASTGP
+esquisse:::ggplot_to_ppt("PMAX_PPASTGP")
+### Topt OFRA
+#anova function
+Topt.modPASTGP <- lm(topt_C~Treatment, data=PAST.DF.GPP)
+summary(Topt.modPASTGP)
+#check for normality, use normality plots
+
+qqnorm(resid(Topt.modPASTGP))
+qqline(resid(Topt.modPASTGP))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Topt.modPASTGP)~PAST.DF.GPP$Treatment)
+
+#high R and low show inconsistent variances, may need to do weighted regression in the future
+
+
+data.summaryTPASTGP<-PAST.DF.GPP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(topt_C), se=sd(topt_C)/sqrt(n())) #calculates mean and s.e.
+data.summaryTPASTGP
+
+Topt_PPASTGP<-ggplot(data.summaryTPASTGP, aes(x=Treatment, y=mean, col= Treatment, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Thermal Optimum (Topt) PAST (GP)", fill="Treatment", color = "Treatment") 
+
+Topt_PPASTGP
+esquisse:::ggplot_to_ppt("Topt_PPASTGP")
+
+#####---- PAST RESPIRATION-----
+
+PAST.DF.RP<-PAST.dfP%>%
+  filter(rate.type=="R")
+
+#anova function
+Pmax.modPAST <- lm(Pmax~Treatment, data=PAST.DF.RP)
+summary(Pmax.modPAST)
+#check for normality, use normality plots
+
+qqnorm(resid(Pmax.modPAST))
+qqline(resid(Pmax.modPAST))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Pmax.modPAST)~PAST.DF.RP$Treatment)
+
+
+data.summaryPAST<-PAST.DF.RP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(Pmax), se=sd(Pmax)/sqrt(n())) #calculates mean and s.e.
+data.summaryPAST
+
+
+PMAX_PPAST<-ggplot(data.summaryPAST, aes(x=Treatment, y=mean, col= Treatment, group=factor(Treatment))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Maximum Rate of Performance (Pmax) PAST (R)", fill="Treatment", color = "Treatment") 
+
+PMAX_PPAST
+esquisse:::ggplot_to_ppt("PMAX_PPAST")
+### Topt PAST
+#anova function
+Topt.modPAST <- lm(topt_C~Treatment, data=PAST.DF.RP)
+summary(Topt.modPAST)
+#check for normality, use normality plots
+
+qqnorm(resid(Topt.modPAST))
+qqline(resid(Topt.modPAST))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Topt.modPAST)~PAST.DF.RP$Treatment)
+
+data.summaryTPAST<-PAST.DF.RP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(topt_C), se=sd(topt_C)/sqrt(n())) #calculates mean and s.e.
+data.summaryTPAST
+
+Topt_PPAST<-ggplot(data.summaryTPAST, aes(x=Treatment, y=mean, col= Treatment, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Thermal Optimum (Topt) PAST (R)", fill="Treatment", color = "Treatment") 
+
+Topt_PPAST
+esquisse:::ggplot_to_ppt("Topt_PPAST")
+######------NEXT
+
+
+#by Rate.Type
+#-------DLAB PHOTOTSYNTHESIS-------
+DLAB.DF.GPP<-DLAB.dfP%>%
+  filter(rate.type=="GP")
+#anova function
+Pmax.modDLABP <- lm(Pmax~Treatment, data=DLAB.DF.GPP)
+summary(Pmax.modDLABP)
+#check for normality, use normality plots
+
+qqnorm(resid(Pmax.modDLABP))
+qqline(resid(Pmax.modDLABP))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Pmax.modDLABP)~DLAB.DF.GPP$Treatment)
+
+
+data.summaryDLABGP<-DLAB.DF.GPP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(Pmax), se=sd(Pmax)/sqrt(n())) #calculates mean and s.e.
+data.summaryDLABGP
+
+PMAX_PDLABGP<-ggplot(data.summaryDLABGP, aes(x=Treatment, y=mean, col= Treatment, group=factor(Treatment))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Maximum Rate of Performance (Pmax) DLAB (GP)", fill="Treatment", color = "Treatment") 
+
+PMAX_PDLABGP
+esquisse:::ggplot_to_ppt("PMAX_PDLABGP")
+### Topt OFRA
+#anova function
+Topt.modDLABGP <- lm(topt_C~Treatment, data=DLAB.DF.GPP)
+summary(Topt.modDLABGP)
+#check for normality, use normality plots
+
+qqnorm(resid(Topt.modDLABGP))
+qqline(resid(Topt.modDLABGP))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Topt.modDLABGP)~DLAB.DF.GPP$Treatment)
+
+#high R and low show inconsistent variances, may need to do weighted regression in the future
+
+
+data.summaryTDLABGP<-DLAB.DF.GPP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(topt_C), se=sd(topt_C)/sqrt(n())) #calculates mean and s.e.
+data.summaryTDLABGP
+
+Topt_PDLABGP<-ggplot(data.summaryTDLABGP, aes(x=Treatment, y=mean, col= Treatment, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Thermal Optimum (Topt) DLAB (GP)", fill="Treatment", color = "Treatment") 
+
+Topt_PDLABGP
+esquisse:::ggplot_to_ppt("Topt_PDLABGP")
+##### DLAB RESPIRATION------
+DLAB.DF.RP<-DLAB.dfP%>%
+  filter(rate.type=="R")
+
+#anova function
+Pmax.modDLAB <- lm(Pmax~Treatment, data=DLAB.DF.RP)
+summary(Pmax.modDLAB)
+#check for normality, use normality plots
+
+qqnorm(resid(Pmax.modDLAB))
+qqline(resid(Pmax.modDLAB))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Pmax.modDLAB)~DLAB.DF.RP$Treatment)
+
+
+data.summaryDLAB<-DLAB.DF.RP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(Pmax), se=sd(Pmax)/sqrt(n())) #calculates mean and s.e.
+data.summaryDLAB
+
+
+PMAX_PDLAB<-ggplot(data.summaryDLAB, aes(x=Treatment, y=mean, col= Treatment, group=factor(Treatment))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Maximum Rate of Performance (Pmax) DLAB (R)", fill="Treatment", color = "Treatment") 
+
+PMAX_PDLAB
+esquisse:::ggplot_to_ppt("PMAX_PDLAB")
+### Topt DLAB
+#anova function
+Topt.modDLAB <- lm(topt_C~Treatment, data=DLAB.DF.RP)
+summary(Topt.modDLAB)
+#check for normality, use normality plots
+
+qqnorm(resid(Topt.modDLAB))
+qqline(resid(Topt.modDLAB))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Topt.modDLAB)~DLAB.DF.RP$Treatment)
+
+data.summaryTDLAB<-DLAB.DF.RP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(topt_C), se=sd(topt_C)/sqrt(n())) #calculates mean and s.e.
+data.summaryTDLAB
+
+Topt_PDLAB<-ggplot(data.summaryTDLAB, aes(x=Treatment, y=mean, col= Treatment, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Thermal Optimum (Topt) DLAB (R)", fill="Treatment", color = "Treatment") 
+
+Topt_PDLAB
+esquisse:::ggplot_to_ppt("Topt_PDLAB")
+#-------MCAV PHOTOSYNTHESIS-------
+MCAV.DF.GPP<-MCAV.dfP%>%
+  filter(rate.type=="GP")
+
+#anova function
+Pmax.modMCAVP <- lm(Pmax~Treatment, data=MCAV.DF.GPP)
+summary(Pmax.modMCAVP)
+#check for normality, use normality plots
+
+qqnorm(resid(Pmax.modMCAVP))
+qqline(resid(Pmax.modMCAVP))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Pmax.modMCAVP)~MCAV.DF.GPP$Treatment)
+
+
+data.summaryMCAVGP<-MCAV.DF.GPP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(Pmax), se=sd(Pmax)/sqrt(n())) #calculates mean and s.e.
+data.summaryMCAVGP
+
+PMAX_PMCAVGP<-ggplot(data.summaryMCAVGP, aes(x=Treatment, y=mean, col= Treatment, group=factor(Treatment))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Maximum Rate of Performance (Pmax) MCAV (GP)", fill="Treatment", color = "Treatment") 
+
+PMAX_PMCAVGP
+esquisse:::ggplot_to_ppt("PMAX_PMCAVGP")
+### Topt OFRA
+#anova function
+Topt.modMCAVGP <- lm(topt_C~Treatment, data=MCAV.DF.GPP)
+summary(Topt.modMCAVGP)
+#check for normality, use normality plots
+
+qqnorm(resid(Topt.modMCAVGP))
+qqline(resid(Topt.modMCAVGP))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Topt.modMCAVGP)~MCAV.DF.GPP$Treatment)
+
+#high R and low show inconsistent variances, may need to do weighted regression in the future
+
+
+data.summaryTMCAVGP<-MCAV.DF.GPP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(topt_C), se=sd(topt_C)/sqrt(n())) #calculates mean and s.e.
+data.summaryTMCAVGP
+
+Topt_PMCAVGP<-ggplot(data.summaryTMCAVGP, aes(x=Treatment, y=mean, col= Treatment, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Thermal Optimum (Topt) MCAV (GP)", fill="Treatment", color = "Treatment") 
+
+Topt_PMCAVGP
+esquisse:::ggplot_to_ppt("Topt_PMCAVGP")
+
+
+#### MCAV_) RESPIRATION-----
+MCAV.DF.RP<-MCAV.dfP%>%
+  filter(rate.type=="R")
+
+#anova function
+Pmax.modMCAV <- lm(Pmax~Treatment, data=MCAV.DF.RP)
+summary(Pmax.modMCAV)
+#check for normality, use normality plots
+
+qqnorm(resid(Pmax.modMCAV))
+qqline(resid(Pmax.modMCAV))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Pmax.modMCAV)~MCAV.DF.RP$Treatment)
+
+
+data.summaryMCAV<-MCAV.DF.RP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(Pmax), se=sd(Pmax)/sqrt(n())) #calculates mean and s.e.
+data.summaryMCAV
+
+
+PMAX_PMCAV<-ggplot(data.summaryMCAV, aes(x=Treatment, y=mean, col= Treatment, group=factor(Treatment))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Maximum Rate of Performance (Pmax) MCAV (R)", fill="Treatment", color = "Treatment") 
+
+PMAX_PMCAV
+esquisse:::ggplot_to_ppt("PMAX_PMCAV")
+### Topt MCAV
+#anova function
+Topt.modMCAV <- lm(topt_C~Treatment, data=MCAV.DF.RP)
+summary(Topt.modMCAV)
+#check for normality, use normality plots
+
+qqnorm(resid(Topt.modMCAV))
+qqline(resid(Topt.modMCAV))
+
+#check heteroscisity with boxplots
+
+boxplot(resid(Topt.modMCAV)~MCAV.DF.RP$Treatment)
+
+data.summaryTMCAV<-MCAV.DF.RP %>%
+  group_by(Treatment, rate.type) %>% #tells to group by these two factors
+  dplyr::summarise(mean=mean(topt_C), se=sd(topt_C)/sqrt(n())) #calculates mean and s.e.
+data.summaryTMCAV
+
+Topt_PMCAV<-ggplot(data.summaryTMCAV, aes(x=Treatment, y=mean, col= Treatment, group=factor(rate.type))) +
+  theme_bw()+
+  theme(legend.title=element_text(colour="black", size=14), axis.text.x=element_text(face="bold", color="black", size=16), axis.text.y=element_text(face="bold", color="black", size=13), axis.title.x = element_text(color="black", size=18, face="bold"), axis.title.y = element_text(color="black", size=18, face="bold"),panel.grid.major=element_blank(), panel.grid.minor=element_blank()) +
+  geom_point(position="dodge", size=2) +
+  theme(legend.text=element_text(size=rel(1))) + #makes legen elements larger
+  geom_errorbar(aes(ymax=mean+se, ymin=mean-se), size=1.2, width=0.4) +
+  labs(x="Depth", y="Thermal Optimum (Topt) MCAV (R)", fill="Treatment", color = "Treatment") 
+
+Topt_PMCAV
+esquisse:::ggplot_to_ppt("Topt_PMCAV")
+
+
+###### go to IndividualTPC's file to see TPC's for each species across each treatment and rate.type
+###### 
+
+
+
+

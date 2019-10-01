@@ -1,0 +1,33 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1567795421511.000,
+    "dirty" : false,
+    "encoding" : "",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "C82C38CD",
+    "lastKnownWriteTime" : 3905796466961113901,
+    "last_content_update" : 1567795421511,
+    "path" : null,
+    "project_path" : null,
+    "properties" : {
+        "cacheKey" : "3CBF3BCE",
+        "caption" : "Pmax_datatest",
+        "contentUrl" : "grid_resource/gridviewer.html?env=&obj=Pmax_datatest&cache_key=3CBF3BCE",
+        "displayedObservations" : 86,
+        "environment" : "",
+        "expression" : "Pmax_datatest",
+        "object" : "Pmax_datatest",
+        "preview" : 0,
+        "totalObservations" : 86,
+        "variables" : 11
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 22,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_dataframe"
+}

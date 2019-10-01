@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1567629158039.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "4174724535",
+    "id" : "A0D45A45",
+    "lastKnownWriteTime" : 1568071792,
+    "last_content_update" : 1568071792263,
+    "path" : "C:/Users/Kate/OneDrive - University of North Carolina at Chapel Hill/2019laptop/Documents/TPC_Acropora/R_files/Scripts/Filtered_TPCs_30CGP.R",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "58,0",
+        "scrollLine" : "0",
+        "tempName" : "Untitled5"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 4,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}
