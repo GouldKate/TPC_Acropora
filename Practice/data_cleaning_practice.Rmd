@@ -1,0 +1,373 @@
+---
+title: "Bruno Lab DataSci Workshop: Data Cleaning"
+author: "Laura Mudge"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: kable 
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+# Setup and Description
+In this markdown file, we will practice our data cleaning skills using the `tidyverse` (and a few other) packages. The following code outlines how to read in a .csv file from a github repository link and some examples on how we can make some summary calculations. There are a lot of tips in here for how to style your R markdown report, but the link below is the definitive guide (literally). </br> </br>
+
+[The Definitive Guide to R Markdown](https://bookdown.org/yihui/rmarkdown/)
+
+## YAML
+the YAML is the headings we see above in the first 13 lines. It will generally/automatically include the title, author, date and output but I've added some other things that are useful </br> </br>
+* __toc__ = table of contents; with `true`, a toc will show up on the left hand side of the output  
+* __toc_float__ = this will allow the toc to float up and down the html output as users scroll down  
+* __df_print__ = how tables will be printed in the output, we are using a special packaged called `kable` so I selected that option   
+* __code_folding__ =  hide will hide (but keep accessible) the code unless the reader clicks on the code button in the output
+
+## Libraries
+It's good practice to have a separate chunk that loads ANY library you will use in this document. 
+```{r setup, results='hide', message=FALSE}
+knitr::opts_chunk$set(echo = TRUE) # will automatically include code in the ouput unless we state otherwise
+knitr::opts_chunk$set(warning= FALSE) # will NOT include warning messages in the output unless we state otherwise
+# knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE) #keeps code wrapped in the output
+
+# if you haven't installed these packages run the following line (first delete the # sign):
+install.packages(c("tidyverse", "janitor", "kableExtra", "cowplot", "skimr", "measurements"))
+
+library(tidyverse) #data wrangling & cleaning incl. ggplot
+library(janitor) # more data cleaning functions
+library(kableExtra) # making pretty tables
+library(cowplot) # making publication quality figures or multi-panel figures
+library(skimr) # tool to get quick overview of dataset
+library(measurements) # useful to convert units
+
+```
+
+
+# Data
+For this case study, we will be using Reef Check substrate (benthic) data from the Caribbean, obtained in March 2018. The monitoring protocol for Reef Check surveys can be found [here](https://reefcheck.org/ecoaction/monitoring-instruction/) and a metadata for the raw data can be found [here](https://github.com/Lmudge13/sample_code/blob/gh-pages/sample_data/reefcheck_metadata).
+</br></br>
+Some important notes:  
+* Transects are 100m total, but consist of four 20m segments. Raw data is reported by segment  
+* 40 points are recorded *per segment*
+* The 'total' column is the # of points for each substrate code in each segment  
+* Substrate codes: HC= Hard coral; NI = Nutrient indicator algae (macro)
+</br></br>
+
+__Read in Reef Check Substrate Data__
+```{r data_import}
+data <- readr::read_csv("https://raw.githubusercontent.com/Lmudge13/sample_code/gh-pages/sample_data/Reef_Check_Caribbean_Substrate.csv")
+
+
+```
+</br></br>
+
+__Review data structure & clean column names__
+```{r data_review}
+# review variables and class types
+str(data)
+
+# use the janitor package to clean up column names- lowercase, no spaces
+data <- janitor::clean_names(data)
+
+# We can do some manual investigation of the data:
+  # How many unqiue coral reefs are included in this dataset?
+length(unique(data$reef_name)) #612
+  # What are the different substrate codes?
+unique(data$substrate_code)
+
+
+# Use the kableExtra package to view a pretty table for a subset of the data:
+  # First, let's just subset the first 10 rows
+data[1:10,] %>% 
+    # Add a title
+  kableExtra::kable(caption="Raw Reef Check Data") %>% 
+    # Specify how we will see the table, type ?kablestyling to see explanations and options
+  kable_styling(bootstrap_options = "condensed", full_width=F) 
+    
+```
+
+```{r skimr, results='hide'}
+
+# And we can use the skimr package to review the dataset
+skimr::skim(data)
+
+```
+
+*****
+
+# Tidyverse Basics
+Here we will practice using common functions from the `dplyr` package. For each example, I typed `data[1:20,]` to specify that we are just going to look at rows 1-20, but all columns (this is just for ease of examining the results).
+```{r tidy_basics}
+
+# use 'select' to pick specific columns to keep
+data[1:20,] %>% dplyr::select(reef_id, date, substrate_code, total)
+  #note: see all 20 rows
+
+# use 'distinct' to find unique combinations
+data[1:20,] %>% distinct(reef_id, date, substrate_code)
+  # note: out of the 20 rows, there are only 7 distinct combos of reef id, date, and substrate code
+
+
+## Note: we can pair the dplyr functions together ##
+
+# use filter to pick specific rows (or types of rows) you want to keep
+data[1:20, ] %>% 
+  select(reef_id, date, substrate_code, total) %>%
+  filter(substrate_code == "HC")
+
+# use mutate to create a new column - via calucation
+data[1:20, ] %>% 
+  select(reef_id, date, substrate_code, total) %>%
+  filter(substrate_code == "HC") %>%
+  mutate(sum_points = sum(total))
+
+# use mutate to create a new column - via adding information
+data[1:20, ] %>% 
+  select(reef_id, date, substrate_code, total) %>%
+  filter(substrate_code == "HC") %>%
+  mutate(sum_points = sum(total),
+         data_source = "Reef Check")
+
+# use arrange to change the order of how variables appear in the column
+data[1:20, ] %>% 
+  select(reef_id, date, substrate_code, total) %>%
+  arrange(substrate_code)
+```
+
+*****
+
+# Data Cleaning {.tabset}
+
+## Percent cover by survey
+```{r duplicate_check}
+
+# Check duplicates: Look at the data based on reef_id, date, and depth (3 identifying variables). 
+
+View(data %>% 
+       distinct(reef_id, date, depth) %>% 
+       arrange(date))
+
+# We see that for some reefs, there are 2 surveys done per day at 2 different depths. Eventually, we will get the AVERAGE for these two transects together.
+
+```
+
+
+Since the raw data tells us the points per segment (20m sections), we will first have to tally how many points there are for all segments of a survey
+```{r cover_by_survey}
+
+#A. Tally the number of points that are HC (hard coral) and total number of possible points (ie # segments x 40); then calculate % HC by survey with HC points/total points * 100
+
+data_by_survey <- data %>%
+  group_by(reef_id, date, depth, substrate_code) %>%
+  filter(substrate_code == "HC") %>%
+  mutate(coral_pts = sum(total),
+         poss_pts = length(segment_code) * 40,
+         perc_survey = (coral_pts/poss_pts)*100) %>%
+  ungroup()
+
+# new_df <- previous_df (this creates a new df based on what we do below, if you don't want to create a new df then you don't do the <- assignment)
+  # pick grouping variables 
+  # only keep rows that have hard coral data
+  # create new columns:
+    # notes: length is a great way to calculate the # of observations (ie rows), based on grouping vars
+  # ungroup- just good practice to do this!
+
+```
+
+## Percent Cover by Site
+Previously, we saw that for some sites, more than 1 survey was done per day. What if we want the average coral cover per site per day?
+```{r cover_by_site}
+
+#B. Find % HC for each site/day combination- here we will take the average % cover and depth if more than 1 survey was done at a reef site in any given day.
+
+data_site_average <- data_by_survey %>%
+  group_by(reef_id, date) %>%
+  mutate(coral = round(mean(perc_survey), 2),
+         coral_std = round(sd(perc_survey), 2),
+         depth_m = round(mean(depth), 2),
+         n_surveys= length(unique(perc_survey))) %>%
+  ungroup() %>%
+  distinct(reef_id, date, .keep_all=TRUE)
+
+
+# new df <- previous_df %>%
+  # grouping by reef id and date will allow us to summarize all surveys done per day per site
+  # create new columns:
+    # note: round() is a great way to limit the number of decimal points in the result!
+  # ungroup your dataframe
+  # keep only the unique reef/day combinations, we add the .keep_all= TRUE to keep all the other columns   
+
+
+
+# check for duplicates:
+dupes <- data_site_average %>%
+  janitor::get_dupes(reef_id, date)
+  # should get this message in console: No duplicate combinations found of: reef_id, date
+
+
+```
+
+
+******
+
+
+# Additional cleaning tasks:        
+Starting with the data_site average dataframe we just created, tidy up dataframe with % cover of coral and macroalgae per survey (wide)  
+        * 1- Remove cols don't need  
+        * 2- Unite deg_min_sec data into 1 col for lat and lon- convert later  
+        * 3- Rename some columns  
+        * 4- Create some metadata columns   
+        * 5- Separate the date into day, month, and year  
+
+```{r advanced_cleaning_template1, eval= FALSE}
+data_tidy <- data_site_average %>%
+  #1 use select to remove the following columns: segment code, total, state_province_island, city_town, perc_survey, errors, and what_errors
+  select() %>%
+  
+  #2 Use the unite function to create 2 columns, one for latitude and one for longitude, by bringing together the degrees, minutes, and seconds columns. Separate by " " (1 space)
+  unite() %>%
+  unite() %>%
+  
+  #3 Rename the longitude_cardinal_direction column to lon_d and rename the latitude_cardinal_direction column to lat_d:
+  rename() %>%
+  
+  #4 Create a new column called region (data value = caribbean), method column (data value = line_transect), and a data_source column (data value= reef_check) 
+  mutate() %>%
+  
+  #5 Separate date into day, month and year columns; remove the original date column
+  separate() 
+  
+```
+
+        
+```{r advanced_cleaning_answer1}
+
+data_tidy <- data_site_average %>% 
+  #1 get rid of columns we no longer need
+  select(-segment_code, -total, -state_province_island, -city_town, -perc_survey, - errors, -what_errors) %>%
+
+  #2 Unite lat and lon col with deg_min_sec together
+  unite(lat, latitude_degrees, latitude_minutes, latitude_seconds, sep =" ") %>%
+  unite(lon, longitude_degrees, longitude_minutes, longitude_seconds, sep = " ") %>%
+  
+  #3 rename columns 
+  rename(lon_d = longitude_cardinal_direction,
+         lat_d = latitude_cardinal_direction) %>%
+  
+  #4 Create new columns with metadata information
+  mutate(region = "caribbean",
+         method= "line_transect",
+         data_source = "reef_check") %>%
+  
+  #5 Separate date:
+  separate(date, into= c("day", "month", "year"), sep="-", remove=TRUE) %>%
+  
+  #always good practice to ungroup your df at the end of tidying:
+  ungroup()
+
+```
+
+Check the structure of our data:
+```{r tidy_check}
+str(data_tidy)
+```
+
+__More cleaning tasks:__ </br>
+* 6- Convert lat/lon values into decimal degree format (use measurements package)  
+* 7- Turn year into 4 digits by adding "20" to the beginning of all values  
+* 8- Check data structure & convert multiple columns from character to numeric typle
+```{r advanced_cleaning_template2, eval=FALSE}
+
+#6: The conv_units() function from the measurements package will help us here, you fill in the rest:
+data_tidy$lat <- measurements::conv_unit()
+data_tidy$lon <- measurements:: conv_unit()
+
+#7: Use the paste() function to add "20" to the beginning of every year value
+data$year <- paste()
+
+#8: Check data using str, then use the mutate_at() function to change multiple columns from type characte to numeric
+str()
+
+
+data_tidy <- data_tidy %>%
+  mutate_at()
+
+```
+
+
+```{r advanced_cleaning_answer2}
+#6: Converting the lat and lon from deg_min_sec to dec_deg formats. Use measurements package to do the conversion:
+
+data_tidy$lat <- measurements::conv_unit(data_tidy$lat, "deg_min_sec", "dec_deg")
+data_tidy$lon <- measurements::conv_unit(data_tidy$lon, "deg_min_sec", "dec_deg")
+
+#7 Turn year into 4 digits-- this code only appropriate here because we know that data is only from the 2000s:
+data_tidy$year <- paste(20, data_tidy$year, sep="")
+
+#8 Use mutate_at() function to changed lon, lat, year and day from character --> numberic
+
+data_tidy <- data_tidy %>%
+  mutate_at(c('lon', 'lat', 'year', 'day'), as.numeric)
+
+
+
+# check to see if that worked:
+str(data_tidy)
+
+# NOTE: if you just had 1 column you wanted to change you could type this instead:
+# data_tidy$day <- as.numeric(data_tidy$day)
+
+# NOTE: The lat/lon are now in decimal format, but would need to change the sign for some values, based on the cardinal directions.
+```
+
+
+__Save your new tidy dataframe into a csv file!__
+```{r save_tidy_data}
+# It is highly recommended you save your tidy data as a .csv file for future use:
+
+# the structure looks like this: write_csv(<name of data frame>, "<file path">)
+
+#write_csv(data_tidy, "C:/github/reefcheck_tidy.csv")
+
+# make sure to commit and push this when you are done!
+```
+
+
+</br></br>
+
+__Quick view of our new tidy dataset__
+```{r data_check}
+# Preview a sample of data:
+
+data_tidy[1:10,] %>%
+  arrange(reef_name) %>%
+  kableExtra::kable(caption="Coral and Macroalgae % Cover from Caribbean Reef Check Surveys") %>%
+  kable_styling(bootstrap_options = "condensed", full_width=F)
+```
+
+```{r}
+
+```
+
+#_Crt + Alt + i_
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
