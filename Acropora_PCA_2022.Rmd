@@ -1,0 +1,964 @@
+---
+title: "Coral Holobiont Physiology under ramping temperature exposure"
+output: 
+  html_document:
+    theme: simplex
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+<style>
+  h2{color: teal !important}
+  h1{color: navy !important}
+  body{background-color: gray95 !important}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(warn = -1)
+```
+
+```{r packages, include=FALSE}
+setwd("C:/Github/TPC_Acropora")
+#library("devtools")
+#install_github("vqv/ggbiplot") # need this to download ggbiplot if not already installed
+## Packages to load
+library(devtools)
+#install_github("vqv/ggbiplot")
+#library(ggbiplot)
+#require(devtools)
+library(usethis)
+#library(install_version)
+library(magrittr)
+#install_version("Magritter", version = "	2.0.1", repos = "http://cran.us.r-project.org")
+library(knitr)
+library(readr)
+library(ggplot2)
+library(dplyr)
+#library(ggbiplot)
+library(tidyr)
+#library(openxlsx)
+library(plotly)
+library(tidyverse)
+library(vegan)
+library(shiny)
+library(Rmisc)
+library(cowplot)
+library(ggfortify)
+library(kableExtra)
+library(readr)
+#library(lmerTest)
+library(vroom)
+library(ggpubr)
+library(magick)
+library(Hmisc)
+library(corrplot)
+library(grid)
+library(gridGraphics)
+library(performance)
+library(MASS)
+library(r2symbols)
+library(corrgram)
+library(factoextra)
+library(FactoMineR)
+
+```
+
+```{r set formatting and labels, include=FALSE}
+## Set some standards and units
+# dodge width
+dodge=position_dodge(width=0.3)
+dodge2=position_dodge(width = 0.6)
+jitter=position_jitter(width=0.1)
+# set figure theme
+theme_set(theme_classic())
+# set parameter labels
+Plab<-expression(paste("log ", mu,"mol cm"^{-2}, "hr"^{-1}))
+Tlab<-"Temperature (°C)"
+plab<-expression(paste("Total protein ( "*mu,"g cm"^-2,")"))
+dlab<-expression(paste("Cell density (10"^5,"cells cm"^-2,")"))
+glab<-expression(paste("Growth Rate (%)"))
+clab<-expression(paste("Chlorophyll a ( "*mu,"g cm"^-2,")"))
+# set the current date
+date <- Sys.Date() 
+```
+
+```{r original dataframe adjustment, include=FALSE}
+df <- read_csv("C:/Github/TPC_Acropora/R_output_Data_Frames/EcophysLOGGEDdata.csv")
+View(df)
+# read in full dataframe
+# remove unnecessary column
+df$X1 <- NULL
+# set columns as factors
+df$cat <- as.factor(df$cat)
+df$genotype <- as.factor(df$genotype)
+df$coral_id <- as.factor(df$coral_id)
+df$treatment <- as.factor(df$treatment) 
+# rename a couple columns
+names(df)[15]<-"Chlo"
+names(df)[19]<-"Growth"
+names(df)[5]<-"Pro"
+names(df)[23]<-"Zoox" 
+
+# select columns of interest only
+df2 <- df[,c(1:3,5,15, 19,22, 23)] 
+
+#data.table::setnames(df2, old = c('protein_3d_ug_cm2','chl_ug_cm2', 'percent_growth', 'totzoox'), new = c('pro','chlo','growth', 'zoox')) #rename for plotting
+
+df2 <- gather(df2, param, value, 'Pro','Chlo','Growth', 'Zoox') # make column of parameter and value
+
+```
+
+```{r bootstrap model setup}
+## Performing the parametric bootstrapping of the model:
+bootnum = 1500 # set number of iterations (we used 2000) between 999 and 9999
+seed = 7 # seed to make results replicatable (our seed was 3)
+set.seed(7)
+```
+
+
+```{r}
+df_s <- df[,c(1:3,5,15, 19,22, 23)] 
+
+## Function to remove rows with any missing values
+completeFun <- function(data, desiredCols) {
+  completeVec <- complete.cases(data[, desiredCols])
+  return(data[completeVec, ])
+}
+
+
+
+df_s <- completeFun(df_s, "Chlo")
+df_s <- completeFun(df_s, "Growth")
+df_s <- completeFun(df_s, "Pro")
+df_s <- completeFun(df_s, "Zoox")
+df_s_l <- gather(df_s, param, value, 4:6,8)
+
+## specific treatments dataframes
+C_df <- subset(df_s, treatment == "Tc") # c
+S_df <- subset(df_s, treatment == "T1") # s
+F_df <- subset(df_s, treatment == "T2") # p
+I_df <- subset(df_s, treatment == "T3") # a
+
+## specific genotypes dataframes
+K2_df <- subset(df_s, genotype == "K2") # s
+M5_df <- subset(df_s, genotype == "M5") # s
+M6_df <- subset(df_s, genotype == "M6") # p
+
+```
+
+## Principal component analyses Ecophys parameters only {.tabset}
+
+#### *Methods:*
+Principal component analysis (PCA) (function *prcomp*) of scaled and centered physiological parameters (host protein, algal symbiont chlorophyll a, algal symbiont cell density, percent growth were employed to assess the relationship between physiological parameters treatment conditions amd genotype for each coral. Main effects (treatment (Sprinkler- feeding & interactive), genotype) were evaluated with PERMANOVA using the *adonis2* function (*vegan* package; version `r packageVersion("vegan")` (Oksanen et al., 2020)).
+
+
+<br/>
+
+### interactive treatment and genotype
+```{r}
+# set up the dataframe
+cat_pca_df <- df_s[,c(4:6,8)]
+
+# run the adonis
+cat_pca_mod <- adonis2(cat_pca_df ~ treatment*genotype, data = df_s, method = 'eu', permutations = bootnum)
+cat_pca_mod # view  adonis output
+# extract pvalues
+cat_pval <- cat_pca_mod["Pr(>F)"]
+# perform principal component analysis (PCA)
+cat_pca <- prcomp(cat_pca_df, center = TRUE, scale= TRUE)
+cat_pca
+```
+
+```{r}
+catEig<- get_eig(cat_pca)
+catEig
+var <- get_pca_var(cat_pca)
+names(var)
+head(var$coord)
+head(var$cor)
+head(var$contrib)
+#zoox 43%- Pro 40% PC1
+#growth 78%- Pro 13% PC2
+corrplot(var$contrib, is.corr=FALSE)
+fviz_eig(cat_pca, addlabels =TRUE)
+fviz_pca_var(cat_pca, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+             )
+```
+
+```{r interaction (treatment*genotype) PCA plot}
+# create labels for p values calculated above
+g_cat_pval <-substitute(italic(P[genotype])==p, list(p = format(cat_pval[2,1], digits = 1)))
+t_cat_pval <-substitute(italic(P[treatment])==p, list(p = format(cat_pval[1,1], digits = 1)))
+I_cat_pval <-substitute(italic(P[geno:treat])==p, list(p = format(cat_pval[3,1], digits = 2)))
+
+# genotype across Treatment 1
+# Treatment
+Interg_cat_pca2 <- autoplot(cat_pca, data = df_s, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.level= 0.95,
+         frame.alpha = 0.0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE, 
+         loadings.label.colour = "black",         
+         loadings.label.size = 4, 
+         loadings.label.hjust = 5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+          scale_fill_manual(values = c('red','green4', 'blue'))+
+    #scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+    #guides(color = guide_legend(keyheight = 0.3, nrow = 6, byrow = TRUE, override.aes = list(linetype = c(0, 0)))) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = 0.0, y = -.75, label = deparse(g_cat_pval), parse = TRUE, size = 3)+
+  ggtitle(expression(paste(bold("A)   "), "Genotype")))
+
+
+Interg_cat_pca2
+ggsave("Interg_cat_pca2.pdf")
+
+
+Intert_cat_pca2 <- autoplot(cat_pca, data = df_s, 
+                           colour = "treatment",
+                           shape = "genotype",
+                           #size=3,
+                           alpha=5,
+                           fill = "treatment",               
+                           frame = TRUE, 
+                           frame.type = "norm",
+                           frame.level= 0.95,
+                           frame.alpha = 0.0,
+                           loadings = TRUE, 
+                           loadings.colour = "black", 
+                           loadings.label = TRUE, 
+                           loadings.label.colour = "black",         
+                           loadings.label.size = 4, 
+                           loadings.label.hjust = 5, 
+                           loadings.label.vjust = 0.5,
+                           loadings.label.repel = TRUE) +
+  scale_color_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  annotate("text", x = 0.0, y = -.75, label = deparse(t_cat_pval), parse = TRUE, size = 3)+
+  ggtitle(expression(paste(bold("   "), "Treatment")))
+
+Intert_cat_pca2
+ggsave("Intert_cat_pca2.pdf")
+
+```
+
+### **Figure 1**
+
+```{r}
+inter_PCA <- ggarrange( Interg_cat_pca,Intert_cat_pca, ncol = 2, common.legend = FALSE, legend = "right")
+inter_PCA
+ggarrange(inter_PCA) 
+ggsave("inter_PCA2.pdf")
+
+```
+
+### Subset data frame to analyze the difference between genotypes across treatments
+
+```{r}
+## specific treatments dataframes
+S_df <- subset(df_s, treatment == "T1") # s
+F_df <- subset(df_s, treatment == "T2") # p
+I_df <- subset(df_s, treatment == "T3") # a
+C_df <- subset(df_s, treatment == "Tc") # c
+```
+
+### Sprinkler Treatment
+```{r}
+# set up the dataframe
+S_df <- unique(S_df) # remove any duplicate rows
+s_df_l <- gather(S_df, param, value, c(4:6,8))
+spr_pca_df <- S_df[,c(4:6,8)]
+
+# run the adonis
+s_pca_mod <- adonis2(spr_pca_df ~ genotype, data = S_df, method = 'eu', permutations = bootnum)
+s_pca_mod # view  adonis output
+summary(s_pca_mod)
+# extract pvalues
+s_pval <- s_pca_mod["Pr(>F)"]
+# perform principal component analysis (PCA)
+s_pca <- prcomp(spr_pca_df, center = TRUE, scale= TRUE)
+s_pca
+```
+
+```{r}
+SEig<- get_eig(s_pca)
+SEig
+var <- get_pca_var(s_pca)
+names(var)
+head(var$coord)
+head(var$cor)
+head(var$contrib)
+#zoox 38%- Pro 27% PC1
+#growth 68%- Pro 28% PC2
+corrplot(var$contrib, is.corr=FALSE)
+fviz_pca_var(s_pca, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+             )
+```
+
+
+```{r sprinkler (T1) PCA plot}
+
+# create labels for p values calculated above
+s_geno_pval <-substitute(italic(P[genotype])==p, list(p = format(s_pval[1,1], digits = 1)))
+# genotype across Treatment 1
+# Treatment sprinkler
+
+T1_geno_pca <- autoplot(s_pca, data = S_df, 
+          colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.level= 0.95,
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = 2.5, 
+         loadings.label.vjust = 1,
+         loadings.label.repel = TRUE) +
+        scale_fill_manual(values = c('red','green4', 'blue'))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = 0.0, y = -1.8, label = deparse(s_geno_pval), parse = TRUE, size = 3)+  ggtitle(expression(paste(bold("A)   "), "Sprinkler")))
+
+T1_geno_pca
+ggsave("T1_geno_pca2.pdf")
+
+```
+
+### Feeding Treatment
+
+```{r}
+# set up the dataframe
+F_df <- unique(F_df) # remove any duplicate rows
+f_df_l <- gather(F_df, param, value, c(4:6,8))
+feed_pca_df <- F_df[,c(4:6,8)]
+
+# run the adonis
+f_pca_mod <- adonis2(feed_pca_df ~ genotype, data = F_df, method = 'eu', permutations = bootnum)
+f_pca_mod # view  adonis output
+# extract pvalues
+f_pval <- f_pca_mod["Pr(>F)"]
+# perform principal component analysis (PCA)
+f_pca <- prcomp(feed_pca_df, center = TRUE, scale= TRUE)
+f_pca
+```
+
+
+```{r}
+FEig<- get_eig(f_pca)
+FEig
+var <- get_pca_var(f_pca)
+names(var)
+head(var$coord)
+head(var$cor)
+head(var$contrib)
+#Pro 44% growth 33% PC1
+#Chlo 63%- growth  27% PC2
+corrplot(var$contrib, is.corr=FALSE)
+fviz_pca_var(f_pca, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+             )
+```
+
+
+```{r Feeding (T2) PCA plot}
+
+# create labels for p values calculated above
+f_geno_pval <-substitute(italic(P[genotype])==p, list(p = format(f_pval[1,1], digits = 1)))
+# genotype across Treatment 2
+# Treatment Feeding
+T2_geno_pca <- autoplot(f_pca, data = F_df, 
+          colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.level= 0.95,
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = 2.5, 
+         loadings.label.vjust = 1,
+         loadings.label.repel = TRUE) +
+        scale_fill_manual(values = c('red','green4', 'blue'))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = 0.0, y = -1.8, label = deparse(f_geno_pval), parse = TRUE, size = 3)+  ggtitle(expression(paste(bold("B)   "), "Feeding")))
+
+
+
+T2_geno_pca
+ggsave("T2_geno_pca2.pdf")
+
+```
+
+### Interactive Sprinkler:Feeding Treatment
+```{r}
+I_df 
+# set up the dataframe
+I_df <- unique(I_df) # remove any duplicate rows
+i_df_l <- gather(I_df, param, value, c(4:6,8))
+inte_pca_df <- I_df[,c(4:6,8)]
+
+# run the adonis
+i_pca_mod <- adonis2(inte_pca_df ~ genotype, data = I_df, method = 'eu', permutations = bootnum)
+i_pca_mod # view  adonis output
+# extract pvalues
+i_pval <- i_pca_mod["Pr(>F)"]
+# perform principal component analysis (PCA)
+i_pca <- prcomp(inte_pca_df, center = TRUE, scale= TRUE)
+i_pca
+```
+
+```{r}
+IEig<- get_eig(i_pca)
+IEig
+var <- get_pca_var(i_pca)
+names(var)
+head(var$coord)
+head(var$cor)
+head(var$contrib)
+#Chlor 39% Zoox 32% PC1
+#growth  65%  Pro 24% PC2
+corrplot(var$contrib, is.corr=FALSE)
+fviz_pca_var(i_pca, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+             )
+```
+
+```{r Interactive (T3) PCA plot}
+
+# create labels for p values calculated above
+i_geno_pval <-substitute(italic(P[genotype])==p, list(p = format(i_pval[1,1], digits = 1)))
+# genotype across Treatment 2
+# Treatment Feeding
+T3_geno_pca <- autoplot(i_pca, data = I_df, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.level= 0.95,
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = 2.5, 
+         loadings.label.vjust = 1,
+         loadings.label.repel = TRUE) +
+        scale_fill_manual(values = c('red','green4', 'blue'))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = 0.0, y = -1.8, label = deparse(i_geno_pval), parse = TRUE, size = 3)+  ggtitle(expression(paste(bold("C)   "), "Interactive")))
+
+
+T3_geno_pca
+ggsave("T3_geno_pca2.pdf")
+
+```
+
+### Control Treatment
+```{r}
+C_df 
+# set up the dataframe
+C_df <- unique(C_df) # remove any duplicate rows
+c_df_l <- gather(C_df, param, value, c(4:6,8))
+cont_pca_df <- C_df[,c(4:6,8)]
+
+# run the adonis
+c_pca_mod <- adonis2(cont_pca_df ~ genotype, data = C_df, method = 'eu', permutations = bootnum)
+c_pca_mod # view  adonis output
+# extract pvalues
+c_pval <- i_pca_mod["Pr(>F)"]
+# perform principal component analysis (PCA)
+c_pca <- prcomp(cont_pca_df, center = TRUE, scale= TRUE)
+c_pca
+summary(c_pca)
+```
+
+```{r}
+CEig<- get_eig(c_pca)
+CEig
+var <- get_pca_var(c_pca)
+names(var)
+head(var$coord)
+head(var$cor)
+head(var$contrib)
+# zoox 37% Chlo/Pro 30% PC1
+# Growth 62% PC2
+corrplot(var$contrib, is.corr=FALSE)
+fviz_pca_var(c_pca, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+             )
+```
+
+
+```{r Control (Tc) PCA plot}
+
+# create labels for p values calculated above
+c_geno_pval <-substitute(italic(P[genotype])==p, list(p = format(c_pval[1,1], digits = 1)))
+# genotype across Treatment 2
+# Treatment Feeding
+Tc_geno_pca <- autoplot(c_pca, data = C_df, 
+          colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.level= 0.95,
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = 2.5, 
+         loadings.label.vjust = 1,
+         loadings.label.repel = TRUE) +
+        scale_fill_manual(values = c('red','green4', 'blue'))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = 0.0, y = -1.8, label = deparse(c_geno_pval), parse = TRUE, size = 3)+  ggtitle(expression(paste(bold("D)   "), "Control")))
+
+
+
+Tc_geno_pca
+ggsave("Tc_geno_pca2.pdf")
+
+```
+
+### Subset data frame to analyze the difference across treatments in each genotype
+
+```{r}
+## specific genotypes dataframes
+K2_df <- subset(df_s, genotype == "K2") # s
+M5_df <- subset(df_s, genotype == "M5") # s
+M6_df <- subset(df_s, genotype == "M6") # p
+```
+
+### K2 genotype
+
+```{r}
+K2_df 
+# set up the dataframe
+K2_df <- unique(K2_df) # remove any duplicate rows
+K2_df_l <- gather(K2_df, param, value, c(4:6,8))
+K2_pca_df <- K2_df[,c(4:6,8)]
+
+# run the adonis
+K2_pca_mod <- adonis2(K2_pca_df ~ treatment, data = K2_df, method = 'eu', permutations = bootnum)
+K2_pca_mod # view  adonis output
+# extract pvalues
+K2_pval <- K2_pca_mod["Pr(>F)"]
+# perform principal component analysis (PCA)
+K2_pca <- prcomp(K2_pca_df, center = TRUE, scale= TRUE)
+```
+
+```{r}
+catEig<- get_eig(K2_pca)
+catEig
+var <- get_pca_var(K2_pca)
+names(var)
+head(var$coord)
+head(var$cor)
+head(var$contrib)
+#
+#
+corrplot(var$contrib, is.corr=FALSE)
+fviz_eig(K2_pca, addlabels =TRUE)
+fviz_pca_var(K2_pca, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+             )
+```
+
+```{r K2 (treatments) PCA plot}
+
+# create labels for p values calculated above
+K2_treat_pval <-substitute(italic(P[treatment])==p, list(p = format(K2_pval[1,1], digits = 1)))
+#K2 genotype and all treatments
+K2_geno_pca <- autoplot(K2_pca, data = K2_df,
+                        colour = "treatment",
+                           shape = "treatment",
+                           #size=3,
+                           alpha=5,
+                           fill = "treatment",               
+                           frame = TRUE, 
+                           frame.type = "norm",
+                           frame.level= 0.95,
+                           frame.alpha = 0.0,
+                           loadings = TRUE, 
+                           loadings.colour = "black", 
+                           loadings.label = TRUE, 
+                           loadings.label.colour = "black",         
+                           loadings.label.size = 4, 
+                           loadings.label.hjust = 5, 
+                           loadings.label.vjust = 0.5,
+                           loadings.label.repel = TRUE) +
+  scale_color_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  annotate("text", x = 0.0, y = -1.75, label = deparse(K2_treat_pval), parse = TRUE, size = 3)+
+  ggtitle(expression(paste(bold("A)   "), "K2")))
+         
+
+
+K2_geno_pca
+ggsave("K2_geno_pca2.pdf")
+
+```
+
+### M5 genotype
+
+```{r}
+M5_df 
+# set up the dataframe
+M5_df <- unique(M5_df) # remove any duplicate rows
+M5_df_l <- gather(M5_df, param, value, c(4:6,8))
+M5_pca_df <- M5_df[,c(4:6,8)]
+
+# run the adonis
+M5_pca_mod <- adonis2(M5_pca_df ~ treatment, data = M5_df, method = 'eu', permutations = bootnum)
+M5_pca_mod # view  adonis output
+# extract pvalues
+M5_pval <- M5_pca_mod["Pr(>F)"]
+# perform principal component analysis (PCA)
+M5_pca <- prcomp(M5_pca_df, center = TRUE, scale= TRUE)
+```
+
+
+```{r M5 (treatments) PCA plot}
+
+# create labels for p values calculated above
+M5_treat_pval <-substitute(italic(P[treatment])==p, list(p = format(M5_pval[1,1], digits = 1)))
+#M5 genotype and all treatments
+M5_geno_pca <- autoplot(M5_pca, data = M5_df, 
+         colour = "treatment",
+                           shape = "treatment",
+                           #size=3,
+                           alpha=5,
+                           fill = "treatment",               
+                           frame = TRUE, 
+                           frame.type = "norm",
+                           frame.level= 0.95,
+                           frame.alpha = 0.0,
+                           loadings = TRUE, 
+                           loadings.colour = "black", 
+                           loadings.label = TRUE, 
+                           loadings.label.colour = "black",         
+                           loadings.label.size = 4, 
+                           loadings.label.hjust = 5, 
+                           loadings.label.vjust = 0.5,
+                           loadings.label.repel = TRUE) +
+  scale_color_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  annotate("text", x = 0.0, y = -1.75, label = deparse(M5_treat_pval), parse = TRUE, size = 3)+
+  ggtitle(expression(paste(bold("B)   "), "M5")))
+
+
+
+M5_geno_pca
+ggsave("M5_geno_pca2.pdf")
+
+```
+
+```{r}
+catEig<- get_eig(M5_pca)
+catEig
+var <- get_pca_var(M5_pca)
+names(var)
+head(var$coord)
+head(var$cor)
+head(var$contrib)
+#
+#
+corrplot(var$contrib, is.corr=FALSE)
+fviz_eig(M5_pca, addlabels =TRUE)
+fviz_pca_var(M5_pca, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+             )
+```
+
+### M6 genotype
+
+```{r}
+M6_df 
+# set up the dataframe
+M6_df <- unique(M6_df) # remove any duplicate rows
+M6_df_l <- gather(M6_df, param, value, c(4:6,8))
+M6_pca_df <- M6_df[,c(4:6,8)]
+
+# run the adonis
+M6_pca_mod <- adonis2(M6_pca_df ~ treatment, data = M6_df, method = 'eu', permutations = bootnum)
+M6_pca_mod # view  adonis output
+# extract pvalues
+M6_pval <- M6_pca_mod["Pr(>F)"]
+# perform principal component analysis (PCA)
+M6_pca <- prcomp(M6_pca_df, center = TRUE, scale= TRUE)
+```
+
+```{r M6 (treatments) PCA plot}
+
+# create labels for p values calculated above
+M6_treat_pval <-substitute(italic(P[treatment])==p, list(p = format(M6_pval[1,1], digits = 1)))
+#M6 genotype and all treatments
+M6_geno_pca <- autoplot(M6_pca, data = M6_df, 
+         colour = "treatment",
+                           shape = "treatment",
+                           #size=3,
+                           alpha=5,
+                           fill = "treatment",               
+                           frame = TRUE, 
+                           frame.type = "norm",
+                           frame.level= 0.95,
+                           frame.alpha = 0.0,
+                           loadings = TRUE, 
+                           loadings.colour = "black", 
+                           loadings.label = TRUE, 
+                           loadings.label.colour = "black",         
+                           loadings.label.size = 4, 
+                           loadings.label.hjust = 5, 
+                           loadings.label.vjust = 0.5,
+                           loadings.label.repel = TRUE) +
+  scale_color_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  annotate("text", x = 0.0, y = -1.75, label = deparse(M6_treat_pval), parse = TRUE, size = 3)+
+  ggtitle(expression(paste(bold("C)   "), "M6")))
+
+M6_geno_pca
+ggsave("M6_geno_pca2.pdf")
+
+```
+
+```{r}
+catEig<- get_eig(M6_pca)
+catEig
+var <- get_pca_var(M6_pca)
+names(var)
+head(var$coord)
+head(var$cor)
+head(var$contrib)
+#
+#
+corrplot(var$contrib, is.corr=FALSE)
+fviz_eig(M6_pca, addlabels =TRUE)
+fviz_pca_var(M6_pca, col.var = "contrib",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+             )
+```
+
+
+### **Figure 2 & 3**
+
+```{r PCA plot}
+#Figure 2
+geno_PCA <- ggarrange(T1_geno_pca,T2_geno_pca,T3_geno_pca,Tc_geno_pca, ncol = 4, common.legend = TRUE, legend = "right")
+ggarrange(geno_PCA) 
+ggsave("geno_PCA.pdf")
+#Figure 3
+treat_PCA <- ggarrange(K2_geno_pca, M5_geno_pca, M6_geno_pca, ncol = 3, common.legend = TRUE, legend = "right")
+ggarrange(treat_PCA) 
+ggsave("treat_PCA.pdf")
+```
+
+
+##########################################################################################
+
+<br/>
+
+## Correlation assessments {.tabset}
+
+#### *Methods:*
+Correlations (Correlation test is used to evaluate the association between two or more variables.) among all physiological parameters were assessed to determine the relationships between parameters within each genotype and treatment The Pearson correlation coefficient (R^2^) of each comparison was calculated using the rcorr package (version `r packageVersion("rcorr")` and the significance was calculated using the *cor.test* function. These relationships were then visualized through simple scatterplots.
+
+<br/>
+
+
+```{r}
+S_df 
+F_df 
+I_df 
+C_df 
+K2_df
+M5_df
+M6_df
+
+```
+
+
+Correlation matrix The function rcorr() [in Hmisc package] can be used to compute the significance levels for pearson and spearman correlations. It returns both the correlation coefficients and the p-value of the correlation for all possible pairs of columns in the data table.
+```{r}
+flattenCorrMatrix <- function(cormat, pmat) {
+  ut <- upper.tri(cormat)
+  data.frame(
+    row = rownames(cormat)[row(cormat)[ut]],
+    column = rownames(cormat)[col(cormat)[ut]],
+    cor  =(cormat)[ut],
+    p = pmat[ut]
+    )
+}
+## create matrix for correlations for all
+S_corr_df2 <- rcorr(as.matrix(S_df[, c(4:6,8)])) #
+S_corr_df2 # correlation matrix
+S_corr_df2$r  # R2 of all correlations
+S_corr_df2$P  # P value of all correlations
+S_corr_df2$r[S_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+flattenCorrMatrix(S_corr_df2$r, S_corr_df2$P)
+#Pro- Zoox 0.28
+#Growth- Zoox 0.217 
+#NS
+
+
+pdf(file = "S_corr_df2.pdf")
+
+corrplot(S_corr_df2$r, type="upper", order="hclust", 
+         p.mat = S_corr_df2$P, sig.level = 0.05, insig = "blank")
+
+grid.echo()
+
+S_corr_df <- grid.grab()
+
+dev.off()
+
+F_corr_df2 <- rcorr(as.matrix(F_df[, c(4:6,8)])) #
+F_corr_df2 # correlation matrix
+F_corr_df2$r  # R2 of all correlations
+F_corr_df2$P  # P value of all correlations
+F_corr_df2$r[F_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+flattenCorrMatrix(F_corr_df2$r, F_corr_df2$P)
+
+
+pdf(file = "F_corr_df2.pdf")
+
+corrplot(F_corr_df2$r, type="upper", order="hclust", 
+         p.mat = F_corr_df2$p, sig.level = 0.05, insig = "blank")
+grid.echo()
+
+F_corr_df <- grid.grab()
+
+dev.off()
+
+I_corr_df2 <- rcorr(as.matrix(I_df[, c(4:6,8)])) #
+I_corr_df2 # correlation matrix
+I_corr_df2$r  # R2 of all correlations
+I_corr_df2$P  # P value of all correlations
+I_corr_df2$r[I_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+flattenCorrMatrix(I_corr_df2$r, I_corr_df2$P)
+
+pdf(file = "I_corr_df2.pdf")
+
+corrplot(I_corr_df2$r, type="upper", order="hclust", 
+         p.mat = I_corr_df2$p, sig.level = 0.05, insig = "blank")
+
+grid.echo()
+
+I_corr_df <- grid.grab()
+
+dev.off()
+
+## create matrix for correlations by treatment
+C_corr_df2 <- rcorr(as.matrix(C_df[, c(4:6,8)])) #
+C_corr_df2 # correlation matrix
+C_corr_df2$r  # R2 of all correlations
+C_corr_df2$P  # P value of all correlations
+C_corr_df2$r[C_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+flattenCorrMatrix(C_corr_df2$r, C_corr_df2$P)
+#Chlo   Zoox  0.60266151 0.0380749338
+#Chlo Growth  0.62102806 0.0311463441
+#Pro   Zoox  0.85782868 0.0003585313
+
+
+pdf(file = "C_corr_df2.pdf")
+
+corrplot(C_corr_df2$r, type="upper", order="hclust", 
+         p.mat = C_corr_df2$p, sig.level = 0.05, insig = "blank")
+
+grid.echo()
+
+C_corr_df <- grid.grab()
+
+dev.off()
+
+## create matrix for correlations by genotype
+K2_corr_df2 <- rcorr(as.matrix(K2_df[, c(4:6,8)])) #
+K2_corr_df2 # correlation matrix
+K2_corr_df2$r  # R2 of all correlations
+K2_corr_df2$P  # P value of all correlations
+K2_corr_df2$r[K2_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+flattenCorrMatrix(K2_corr_df2$r, K2_corr_df2$P)
+
+pdf(file = "K2_corr_df2.pdf")
+
+corrplot(K2_corr_df2$r, type="upper", order="hclust", 
+         p.mat = K2_corr_df2$p, sig.level = 0.05, insig = "blank")
+
+
+grid.echo()
+
+K2_corr_df <- grid.grab()
+
+dev.off()
+
+M5_corr_df2 <- rcorr(as.matrix(M5_df[, c(4:6,8)])) #
+M5_corr_df2 # correlation matrix
+M5_corr_df2$r  # R2 of all correlations
+M5_corr_df2$P  # P value of all correlations
+M5_corr_df2$r[M5_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+flattenCorrMatrix(M5_corr_df2$r, M5_corr_df2$P)
+                  #Cor        Pvalue
+#1    Pro   Chlo  0.33218640 0.2087419
+#2    Pro Growth -0.04560787 0.8668043
+#3   Chlo Growth -0.07300049 0.7881811
+#4    Pro   Zoox  0.86518972 1.508012e-05 1.51e-05
+#5   Chlo   Zoox  0.41968841 0.1055904
+#6 Growth   Zoox -0.06872059 0.8003589
+
+pdf(file = "M5_corr_df2.pdf")
+
+corrplot(M5_corr_df2$r, type="upper", order="hclust", 
+         p.mat = M5_corr_df2$p, sig.level = 0.05, insig = "blank")
+grid.echo()
+
+M5_corr_df <- grid.grab()
+
+dev.off()
+
+M6_corr_df2 <- rcorr(as.matrix(M6_df[, c(4:6,8)])) #
+M6_corr_df2 # correlation matrix
+M6_corr_df2$r  # R2 of all correlations
+M6_corr_df2$P  # P value of all correlations
+M6_corr_df2$r[M6_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+flattenCorrMatrix(M6_corr_df2$r, M6_corr_df2$P)
+
+
+pdf(file = "M6_corr_df2.pdf")
+
+corrplot(M6_corr_df2$r, type="upper", order="hclust", 
+         p.mat = M6_corr_df2$p, sig.level = 0.05, insig = "blank")
+
+grid.echo()
+
+M6_corr_df <- grid.grab()
+
+dev.off()
+```
+
+
+
