@@ -1,0 +1,2227 @@
+---
+title: "Coral Holobiont Physiology under ramping temperature exposure"
+output: 
+  html_document:
+    theme: simplex
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+<style>
+  h2{color: teal !important}
+  h1{color: navy !important}
+  body{background-color: gray95 !important}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(warn = -1)
+```
+
+```{r packages, include=FALSE}
+setwd("C:/Github/TPC_Acropora")
+#library("devtools")
+#install_github("vqv/ggbiplot") # need this to download ggbiplot if not already installed
+## Packages to load
+library(devtools)
+#install_github("vqv/ggbiplot")
+#library(ggbiplot)
+#require(devtools)
+library(usethis)
+#library(install_version)
+library(magrittr)
+#install_version("Magritter", version = "	2.0.1", repos = "http://cran.us.r-project.org")
+library(knitr)
+library(readr)
+library(ggplot2)
+library(dplyr)
+#library(ggbiplot)
+library(tidyr)
+#library(openxlsx)
+library(plotly)
+library(tidyverse)
+library(vegan)
+library(shiny)
+library(Rmisc)
+library(cowplot)
+library(ggfortify)
+library(kableExtra)
+library(readr)
+#library(lmerTest)
+library(vroom)
+library(ggpubr)
+library(magick)
+library(Hmisc)
+library(corrplot)
+library(grid)
+library(gridGraphics)
+library(performance)
+library(MASS)
+```
+
+```{r set formatting and labels, include=FALSE}
+## Set some standards and units
+# dodge width
+#dodge=position_dodge(width=0.3)
+#dodge2=position_dodge(width = 0.6)
+#jitter=position_jitter(width=0.1)
+# set figure theme
+theme_set(theme_classic())
+# set parameter labels
+Tlab<-"Temperature (°C)"
+plab<-expression(paste("Total protein ( "*mu,"g cm"^-2,")"))
+dlab<-expression(paste("Cell density (10"^5,"cells cm"^-2,")"))
+glab<-expression(paste("Growth Rate (%)"))
+clab<-expression(paste("Chlorophyll a ( "*mu,"g cm"^-2,")"))
+# set the current date
+date <- Sys.Date() 
+```
+
+```{r original dataframe adjustment, include=FALSE}
+df <- read_csv("C:/Github/TPC_Acropora/R_output_Data_Frames/EcophysLOGGEDdata.csv")
+# read in full dataframe
+# remove unnecessary column
+df$X1 <- NULL
+# set columns as factors
+df$cat <- as.factor(df$cat)
+df$genotype <- as.factor(df$genotype)
+df$coral_id <- as.factor(df$coral_id)
+df$treatment <- as.factor(df$treatment) 
+# select columns of interest only
+df2 <- df[,c(1:3,5,11, 19,22, 23)] 
+df2 <- gather(df2, param, value, protein_3d_ug_cm2,chl_ug,percent_growth,totzoox) # make column of parameter and value
+```
+
+
+```{r}
+# select columns of interest only for ALL logged parameters
+dfl <- df[,c(1:3, 20, 22, 24:26)]
+dfl <- gather(dfl, param, value, logprotein, logzoo, logpercent_growth, logchl_ug_cm2) # make column of parameter and value
+```
+
+```{r}
+# subset the dataframe for only T0 samples (inital)
+data<-read.csv("C:/Github/TPC_Acropora/Raw_data/Ecophys_data/TidyEcopphysData.csv")
+data <- janitor::clean_names(data)
+
+df_i<-data%>%
+  filter(treatment=="i")%>%
+  filter(genotype!="M7")
+
+df_i$totzoox<-df_i$zoox_cm2_3d/100000
+
+df_i$logzoo<-log(df_i$totzoox+1)
+df_i$logprotein<-log(df_i$protein_3d_ug_cm2+1)
+df_i$logchl_ug_cm2<-log(df_i$chl_ug_cm2+1)
+
+df_i$cat <- paste(df_i$treatment,df_i$genotype)
+df_i$cat<-factor(df_i$cat)
+df_i$genotype <- as.factor(df_i$genotype)
+df_i$coral_id <- as.factor(df_i$coral_id)
+df_i$treatment <- as.factor(df_i$treatment) 
+
+df_iT0l <-df_i[,c(1:3, 21:24)]
+
+df_iT0 <- df_i[,c(1:3,5,15,20,24)]
+
+df_il <- gather(df_iT0l, param, value, logprotein, logzoo,  logchl_ug_cm2)
+df_i2 <- gather(df_iT0, param, value, protein_3d_ug_cm2, totzoox,  chl_ug_cm2)
+# set up the dataframe
+df_sp<-df[,c(1:3, 5,15, 22,24:25)]
+
+data.table::setnames(df_sp, old = c('protein_3d_ug_cm2','chl_ug_cm2', 'logpercent_growth', 'logzoo'), new = c('Pro','Chlo','Growth','Zoox'))
+
+df_sp <- unique(df_sp)# remove any duplicate rows
+ldf_sp <- gather(df_sp, param, value, c(4:5, 7:8))
+```
+
+```{r bootstrap model setup}
+## Function to remove rows with any missing values
+completeFun <- function(data, desiredCols) {
+  completeVec <- complete.cases(data[, desiredCols])
+  return(data[completeVec, ])
+}
+## Performing the parametric bootstrapping of the model:
+bootnum = 2000 # set number of iterations (we used 2000) between 999 and 9999
+seed = 7 #seed to make results replicatable (our seed was 7)
+```
+
+
+## Model selection for physiology{.tabset}
+
+Physiological response parameters were assessed using mixed-effects linear models across species and treatments. Model selection was carried out using backward elimination of random-effects followed by fixed-effects using the package [*lmerTest*](https://cran.r-project.org/web/packages/lmerTest/lmerTest.pdf) (version `r packageVersion("lmerTest")`)
+
+
+
+```{r T0 model selection, eval=FALSE, include=FALSE}
+### Planning to model all measured values in response to parameter and genotype
+df_fin <- (df2) 
+df_finl<-(dfl)
+## running forloop to model each per genotype in each parameter
+param_list <- levels(factor(df_fin$param))# create a list of parameter names
+for (p in 1:length(param_list)) {
+  
+  # subset T0 dataframe by selected param name
+  param_name <- param_list[p]
+  T0_df_sub <- subset(df_fin, param == param_name)
+  
+  # run linear model 
+  model <- lm(value ~ genotype, data = T0_df_sub) 
+  out <- simulate(model, nsim = bootnum, seed = seed, re.form = NULL) # simulate model response 2000 (bootnum)   times
+  boots <- apply(out, 2, function(x) predict(lm(x ~ genotype, data = T0_df_sub), re.form=NA)) #   applies predict function on the columns (2) of the 'out' matrix created above from simulating the model 
+  boots <- cbind(predict(model, re.form = NA), boots) # adds column to above df of predicted values without   random effects
+  df_fin_a <- (cbind(T0_df_sub, as.data.frame(t(apply(boots, 1, function(x) c(mean(x), quantile(x, c(0.025, 0.975)))))))) #   apply function to calculate mean and 95% CI per sample based on the bootstrapped values, then add these to the actual   values dataframe
+  colnames(df_fin_a)[7:9] <- c("mean", "lowerci", "upperci") # rename columns with bootstrapped values
+  ## save model results
+  T0_df <- paste("LMER_model_outputs/Genotype_models/lm", param_name, date, sep="_") 
+  T0_df <- paste(T0_df, ".csv", sep="") 
+  write.csv(df_fin_a, file = T0_df)  # last saved model was: 2020-11-11
+  
+  }
+## read in all T0 model files and merge into single file
+files <- fs::dir_ls(glob = "*csv", path = "LMER_model_outputs/Genotype_models")
+mergedT0 <- vroom(files)
+write.csv(mergedT0, file = paste("LMER_model_outputs/Genotype_models/Genotype_combined_out_", date, ".csv", sep=""))  # last saved model was: 2021-3-23  
+```
+
+
+```{r}
+#For logged
+## running forloop to model each T0 CI per species in each parameter
+param_list <- levels(factor(df_finl$param))# create a list of parameter names
+for (p in 1:length(param_list)) {
+  
+  # subset T0 dataframe by selected param name
+  param_name <- param_list[p]
+  T0_dfl_sub <- subset(df_finl, param == param_name)
+  
+  # run linear model 
+  model <- lm(value ~ genotype, data = T0_dfl_sub) 
+  out <- simulate(model, nsim = bootnum, seed = seed, re.form = NULL) # simulate model response 2000 (bootnum)   times
+  boots <- apply(out, 2, function(x) predict(lm(x ~ genotype, data = T0_dfl_sub), re.form=NA)) #   applies predict function on the columns (2) of the 'out' matrix created above from simulating the model 
+  boots <- cbind(predict(model, re.form = NA), boots) # adds column to above df of predicted values without   random effects
+  df_fin_al <- (cbind(T0_dfl_sub, as.data.frame(t(apply(boots, 1, function(x) c(mean(x), quantile(x, c(0.025, 0.975)))))))) #   apply function to calculate mean and 95% CI per sample based on the bootstrapped values, then add these to the actual   values dataframe
+  colnames(df_fin_al)[7:9] <- c("mean", "lowerci", "upperci") # rename columns with bootstrapped values
+  ## save model results
+  T0_dfl <- paste("LMER_model_outputs/Genotype_models/log/lm", param_name, date, sep="_") 
+  T0_dfl <- paste(T0_dfl, ".csv", sep="") 
+  write.csv(df_fin_al, file = T0_dfl)  # last saved model was: 2020-11-11
+  
+  }
+## read in all T0 model files and merge into single file
+files <- fs::dir_ls(glob = "*csv", path = "LMER_model_outputs/Genotype_models/log")
+mergedT0 <- vroom(files)
+write.csv(mergedT0, file = paste("LMER_model_outputs/Genotype_models/log/Genotypelog_combined_out_", date, ".csv", sep=""))  # last saved model was: 2021-3-23
+```
+
+Treatment linear models
+```{r}
+## running forloop to model each per treatment in each parameter
+param_list <- levels(factor(df_fin$param))# create a list of parameter names
+for (p in 1:length(param_list)) {
+  
+  # subset T0 dataframe by selected param name
+  param_name <- param_list[p]
+  T0_df_sub <- subset(df_fin, param == param_name)
+  
+  # run linear model 
+  model <- lm(value ~ treatment, data = T0_df_sub) 
+  out <- simulate(model, nsim = bootnum, seed = seed, re.form = NULL) # simulate model response 2000 (bootnum)   times
+  boots <- apply(out, 2, function(x) predict(lm(x ~ treatment, data = T0_df_sub), re.form=NA)) #   applies predict function on the columns (2) of the 'out' matrix created above from simulating the model 
+  boots <- cbind(predict(model, re.form = NA), boots) # adds column to above df of predicted values without   random effects
+  df_fin_a <- (cbind(T0_df_sub, as.data.frame(t(apply(boots, 1, function(x) c(mean(x), quantile(x, c(0.025, 0.975)))))))) #   apply function to calculate mean and 95% CI per sample based on the bootstrapped values, then add these to the actual   values dataframe
+  colnames(df_fin_a)[7:9] <- c("mean", "lowerci", "upperci") # rename columns with bootstrapped values
+  ## save model results
+  T0_df <- paste("LMER_model_outputs/Treatment_models/lm", param_name, date, sep="_") 
+  T0_df <- paste(T0_df, ".csv", sep="") 
+  write.csv(df_fin_a, file = T0_df)  # last saved model was: 2020-11-11
+  
+  }
+## read in all T0 model files and merge into single file
+files <- fs::dir_ls(glob = "*csv", path = "LMER_model_outputs/Treatment_models")
+mergedT0 <- vroom(files)
+write.csv(mergedT0, file = paste("LMER_model_outputs/Treatment_models/Treatment_combined_out_", date, ".csv", sep=""))  # last saved model was: 2021-3-23  
+```
+
+
+```{r}
+#For logged
+## running forloop to model each T0 CI per species in each parameter
+param_list <- levels(factor(df_finl$param))# create a list of parameter names
+for (p in 1:length(param_list)) {
+  
+  # subset T0 dataframe by selected param name
+  param_name <- param_list[p]
+  T0_dfl_sub <- subset(df_finl, param == param_name)
+  
+  # run linear model 
+  model <- lm(value ~ treatment, data = T0_dfl_sub) 
+  out <- simulate(model, nsim = bootnum, seed = seed, re.form = NULL) # simulate model response 2000 (bootnum)   times
+  boots <- apply(out, 2, function(x) predict(lm(x ~ treatment, data = T0_dfl_sub), re.form=NA)) #   applies predict function on the columns (2) of the 'out' matrix created above from simulating the model 
+  boots <- cbind(predict(model, re.form = NA), boots) # adds column to above df of predicted values without   random effects
+  df_fin_al <- (cbind(T0_dfl_sub, as.data.frame(t(apply(boots, 1, function(x) c(mean(x), quantile(x, c(0.025, 0.975)))))))) #   apply function to calculate mean and 95% CI per sample based on the bootstrapped values, then add these to the actual   values dataframe
+  colnames(df_fin_al)[7:9] <- c("mean", "lowerci", "upperci") # rename columns with bootstrapped values
+  ## save model results
+  T0_dfl <- paste("LMER_model_outputs/Treatment_models/log/lm", param_name, date, sep="_") 
+  T0_dfl <- paste(T0_dfl, ".csv", sep="") 
+  write.csv(df_fin_al, file = T0_dfl)  # last saved model was: 2020-11-11
+  
+  }
+## read in all T0 model files and merge into single file
+files <- fs::dir_ls(glob = "*csv", path = "LMER_model_outputs/Treatment_models/log")
+mergedT0 <- vroom(files)
+write.csv(mergedT0, file = paste("LMER_model_outputs/Treatment_models/log/Treatmentlog_combined_out_", date, ".csv", sep=""))  # last saved model was: 2021-3-23
+```
+
+
+SP data modelling
+```{r}
+### Planning to model all measured values in response to parameter and treatment
+ldf_sp
+## running forloop to model each per treatment in each parameter
+param_list <- levels(factor(ldf_sp$param))# create a list of parameter names
+for (p in 1:length(param_list)) {
+  
+  # subset T0 dataframe by selected param name
+  param_name <- param_list[p]
+  T0_df_sub <- subset(ldf_sp, param == param_name)
+  
+  # run linear model 
+  model <- lm(value ~ treatment, data = T0_df_sub) 
+  out <- simulate(model, nsim = bootnum, seed = seed, re.form = NULL) # simulate model response 2000 (bootnum)   times
+  boots <- apply(out, 2, function(x) predict(lm(x ~ treatment, data = T0_df_sub), re.form=NA)) #   applies predict function on the columns (2) of the 'out' matrix created above from simulating the model 
+  boots <- cbind(predict(model, re.form = NA), boots) # adds column to above df of predicted values without   random effects
+  df_fin_a <- (cbind(T0_df_sub, as.data.frame(t(apply(boots, 1, function(x) c(mean(x), quantile(x, c(0.025, 0.975)))))))) #   apply function to calculate mean and 95% CI per sample based on the bootstrapped values, then add these to the actual   values dataframe
+  colnames(df_fin_a)[7:9] <- c("mean", "lowerci", "upperci") # rename columns with bootstrapped values
+  ## save model results
+  T0_df <- paste("LMER_model_outputs/SP/Treatment/lm", param_name, date, sep="_") 
+  T0_df <- paste(T0_df, ".csv", sep="") 
+  write.csv(df_fin_a, file = T0_df)  # last saved model was: 2020-11-11
+  
+  }
+## read in all T0 model files and merge into single file
+files <- fs::dir_ls(glob = "*csv", path = "LMER_model_outputs/SP/Treatment")
+mergedT0 <- vroom(files)
+write.csv(mergedT0, file = paste("LMER_model_outputs/SP/Treatment/Treatment_combined_out_", date, ".csv", sep=""))  # last saved model was: 2021-3-23
+```
+
+Genotype
+```{r}
+### Planning to model all measured values in response to parameter and Genotype
+ldf_sp
+## running forloop to model each per Genotype in each parameter
+param_list <- levels(factor(ldf_sp$param))# create a list of parameter names
+for (p in 1:length(param_list)) {
+  
+  # subset T0 dataframe by selected param name
+  param_name <- param_list[p]
+  T0_df_sub <- subset(ldf_sp, param == param_name)
+  
+  # run linear model 
+  model <- lm(value ~ genotype, data = T0_df_sub) 
+  out <- simulate(model, nsim = bootnum, seed = seed, re.form = NULL) # simulate model response 2000 (bootnum)   times
+  boots <- apply(out, 2, function(x) predict(lm(x ~ genotype, data = T0_df_sub), re.form=NA)) #   applies predict function on the columns (2) of the 'out' matrix created above from simulating the model 
+  boots <- cbind(predict(model, re.form = NA), boots) # adds column to above df of predicted values without   random effects
+  df_fin_a <- (cbind(T0_df_sub, as.data.frame(t(apply(boots, 1, function(x) c(mean(x), quantile(x, c(0.025, 0.975)))))))) #   apply function to calculate mean and 95% CI per sample based on the bootstrapped values, then add these to the actual   values dataframe
+  colnames(df_fin_a)[7:9] <- c("mean", "lowerci", "upperci") # rename columns with bootstrapped values
+  ## save model results
+  T0_df <- paste("LMER_model_outputs/SP/Genotype/lm", param_name, date, sep="_") 
+  T0_df <- paste(T0_df, ".csv", sep="") 
+  write.csv(df_fin_a, file = T0_df)  # last saved model was: 2020-11-11
+  
+  }
+## read in all T0 model files and merge into single file
+files <- fs::dir_ls(glob = "*csv", path = "LMER_model_outputs/SP/Genotype")
+mergedT0 <- vroom(files)
+write.csv(mergedT0, file = paste("LMER_model_outputs/SP/Genotype/Genotype_combined_out_", date, ".csv", sep=""))  # last saved model was: 2021-3-23
+```
+
+
+Interctive Cat
+
+```{r}
+### Planning to model all measured values in response to parameter and Genotype
+ldf_sp
+## running forloop to model each per Genotype in each parameter
+param_list <- levels(factor(ldf_sp$param))# create a list of parameter names
+for (p in 1:length(param_list)) {
+  
+  # subset T0 dataframe by selected param name
+  param_name <- param_list[p]
+  T0_df_sub <- subset(ldf_sp, param == param_name)
+  
+  # run linear model 
+  model <- lm(value ~ cat, data = T0_df_sub) 
+  out <- simulate(model, nsim = bootnum, seed = seed, re.form = NULL) # simulate model response 2000 (bootnum)   times
+  boots <- apply(out, 2, function(x) predict(lm(x ~ cat, data = T0_df_sub), re.form=NA)) #   applies predict function on the columns (2) of the 'out' matrix created above from simulating the model 
+  boots <- cbind(predict(model, re.form = NA), boots) # adds column to above df of predicted values without   random effects
+  df_fin_a <- (cbind(T0_df_sub, as.data.frame(t(apply(boots, 1, function(x) c(mean(x), quantile(x, c(0.025, 0.975)))))))) #   apply function to calculate mean and 95% CI per sample based on the bootstrapped values, then add these to the actual   values dataframe
+  colnames(df_fin_a)[7:9] <- c("mean", "lowerci", "upperci") # rename columns with bootstrapped values
+  ## save model results
+  T0_df <- paste("LMER_model_outputs/SP/CAT/lm", param_name, date, sep="_") 
+  T0_df <- paste(T0_df, ".csv", sep="") 
+  write.csv(df_fin_a, file = T0_df)  # last saved model was: 2020-11-11
+  
+  }
+## read in all T0 model files and merge into single file
+files <- fs::dir_ls(glob = "*csv", path = "LMER_model_outputs/SP/CAT")
+mergedT0 <- vroom(files)
+write.csv(mergedT0, file = paste("LMER_model_outputs/SP/CAT/CAT_combined_out_", date, ".csv", sep=""))  # last saved model was: 2021-3-23
+```
+
+Cat linear models
+```{r}
+## running forloop to model each per treatment in each parameter
+param_list <- levels(factor(df_fin$param))# create a list of parameter names
+for (p in 1:length(param_list)) {
+  
+  # subset T0 dataframe by selected param name
+  param_name <- param_list[p]
+  T0_df_sub <- subset(df_fin, param == param_name)
+  
+  # run linear model 
+  model <- lm(value ~ cat, data = T0_df_sub) 
+  out <- simulate(model, nsim = bootnum, seed = seed, re.form = NULL) # simulate model response 2000 (bootnum)   times
+  boots <- apply(out, 2, function(x) predict(lm(x ~ cat, data = T0_df_sub), re.form=NA)) #   applies predict function on the columns (2) of the 'out' matrix created above from simulating the model 
+  boots <- cbind(predict(model, re.form = NA), boots) # adds column to above df of predicted values without   random effects
+  df_fin_a <- (cbind(T0_df_sub, as.data.frame(t(apply(boots, 1, function(x) c(mean(x), quantile(x, c(0.025, 0.975)))))))) #   apply function to calculate mean and 95% CI per sample based on the bootstrapped values, then add these to the actual   values dataframe
+  colnames(df_fin_a)[7:9] <- c("mean", "lowerci", "upperci") # rename columns with bootstrapped values
+  ## save model results
+  T0_df <- paste("LMER_model_outputs/Cat_models/lm", param_name, date, sep="_") 
+  T0_df <- paste(T0_df, ".csv", sep="") 
+  write.csv(df_fin_a, file = T0_df)  # last saved model was: 2020-11-11
+  
+  }
+## read in all T0 model files and merge into single file
+files <- fs::dir_ls(glob = "*csv", path = "LMER_model_outputs/Cat_models")
+mergedT0 <- vroom(files)
+write.csv(mergedT0, file = paste("LMER_model_outputs/Cat_models/Cat_combined_out_", date, ".csv", sep=""))  # last saved model was: 2021-3-23  
+```
+
+```{r}
+#For logged
+## running forloop to model each T0 CI per species in each parameter
+param_list <- levels(factor(df_finl$param))# create a list of parameter names
+for (p in 1:length(param_list)) {
+  
+  # subset T0 dataframe by selected param name
+  param_name <- param_list[p]
+  T0_dfl_sub <- subset(df_finl, param == param_name)
+  
+  # run linear model 
+  model <- lm(value ~ cat, data = T0_dfl_sub) 
+  out <- simulate(model, nsim = bootnum, seed = seed, re.form = NULL) # simulate model response 2000 (bootnum)   times
+  boots <- apply(out, 2, function(x) predict(lm(x ~ cat, data = T0_dfl_sub), re.form=NA)) #   applies predict function on the columns (2) of the 'out' matrix created above from simulating the model 
+  boots <- cbind(predict(model, re.form = NA), boots) # adds column to above df of predicted values without   random effects
+  df_fin_al <- (cbind(T0_dfl_sub, as.data.frame(t(apply(boots, 1, function(x) c(mean(x), quantile(x, c(0.025, 0.975)))))))) #   apply function to calculate mean and 95% CI per sample based on the bootstrapped values, then add these to the actual   values dataframe
+  colnames(df_fin_al)[7:9] <- c("mean", "lowerci", "upperci") # rename columns with bootstrapped values
+  ## save model results
+  T0_dfl <- paste("LMER_model_outputs/Cat_models/log/lm", param_name, date, sep="_") 
+  T0_dfl <- paste(T0_dfl, ".csv", sep="") 
+  write.csv(df_fin_al, file = T0_dfl)  # last saved model was: 2020-11-11
+  
+  }
+## read in all T0 model files and merge into single file
+files <- fs::dir_ls(glob = "*csv", path = "LMER_model_outputs/Cat_models/log")
+mergedT0 <- vroom(files)
+write.csv(mergedT0, file = paste("LMER_model_outputs/Cat_models/log/catlog_combined_out_", date, ".csv", sep=""))  # last saved model was: 2021-3-23
+```
+
+
+<br/>
+
+
+## Correlation assessments{.tabset}
+
+Here, I am exploring the relationships between each physiology parameter measured above.
+
+```{r T90 df setup}
+#protein_3d_ug_cm2,chl_ug,percent_growth,totzoox
+
+df_90 <- df 
+df_90 <- df_90[,c(1:3,5,15, 19,22, 23)]
+df_90 <- completeFun(df_90, "protein_3d_ug_cm2")
+df_90 <- completeFun(df_90, "totzoox")
+df_90 <- completeFun(df_90, "chl_ug_cm2")
+df_90 <- completeFun(df_90, "percent_growth")
+df_90_l <- gather(df_90, param, value, c(4:6, 8))
+
+```
+
+```{r}
+#logprotein, logzoo, logpercent_growth, logchl_ug_cm2
+df_90l <- df 
+df_90l <- df_90l[,c(1:3, 20, 22, 24:26)]
+df_90l <- completeFun(df_90l, "logprotein")
+df_90l <- completeFun(df_90l, "logzoo")
+df_90l <- completeFun(df_90l, "logchl_ug_cm2")
+df_90l <- completeFun(df_90l, "logpercent_growth")
+df_90l_l <- gather(df_90l, param, value, c(4,6:8))
+```
+
+```{r}
+df_iT0l
+df_iT0 
+
+df_90
+df_90l
+
+```
+
+```{r correlation df setup}
+## dataframe updates
+df_90$ID <- paste(df_90$coral_id, df_90$treatment, sep = "_") # add coral name to treatment
+df_subset <- as.data.frame(df_90) # subset the df for desired columns
+df_subset <- df_90[!duplicated(df_90$ID), ] # remove any duplicated values NO Duplicates
+rownames(df_subset) <- df_subset$ID # rename rows with ID
+## dataframe updates log
+df_90l$ID <- paste(df_90l$coral_id, df_90l$treatment, sep = "_") # add coral name to treatment
+df_subsetl <- as.data.frame(df_90l) # subset the df for desired columns
+df_subsetl <- df_90l[!duplicated(df_90l$ID), ] # remove any duplicated values NO Duplicates
+rownames(df_subsetl) <- df_subsetl$ID # rename rows with ID
+
+data.table::setnames(df_90, old = c('protein_3d_ug_cm2','chl_ug_cm2', 'percent_growth', 'totzoox'), new = c('Pro','Chlo','Growth','Zoox'))
+df_90
+
+data.table::setnames(df_90l, old = c('logprotein','logchl_ug_cm2', 'logpercent_growth', 'logzoo'), new = c('LPro','LChlo','LGrowth','LZoox'))
+df_90l
+## dataframe updates
+df_iT0$ID <- paste(df_iT0$coral_id, df_iT0$treatment, sep = "_") # add coral name to treatment
+df_subseti <- as.data.frame(df_iT0) # subset the df for desired columns
+df_subseti <- df_iT0[!duplicated(df_iT0$ID), ] # remove any duplicated values NO Duplicates
+rownames(df_subseti) <- df_subseti$ID # rename rows with ID
+## dataframe updates log
+df_iT0l$ID <- paste(df_iT0l$coral_id, df_iT0l$treatment, sep = "_") # add coral name to treatment
+df_subsetil <- as.data.frame(df_iT0l) # subset the df for desired columns
+df_subseitl <- df_iT0l[!duplicated(df_iT0l$ID), ] # remove any duplicated values NO Duplicates
+rownames(df_subsetil) <- df_subsetil$ID # rename rows with ID
+
+
+data.table::setnames(df_iT0, old = c('protein_3d_ug_cm2','chl_ug_cm2',  'totzoox'), new = c('Pro','Chlo','Zoox'))
+df_iT0
+data.table::setnames(df_iT0l, old = c('logprotein','logchl_ug_cm2', 'logzoo'), new = c('LPro','LChlo','LZoox'))
+df_iT0l
+
+
+
+
+df_90lng<-df_90l
+df_90lng$LGrowth=NULL
+df_pcal<-rbind(df_90lng,df_iT0l)
+
+df_90ng<-df_90
+df_90ng$Growth=NULL
+df_pca<-rbind(df_90ng,df_iT0)
+
+
+
+df_pca
+df_pcal
+##
+##run anovas etc
+```
+
+
+```{r}
+acph.pca <- prcomp(df_subset[,c(4:6,8)], center = TRUE,scale. = TRUE)
+summary(acph.pca)
+str(acph.pca)
+autoplot(acph.pca)
+ta<-autoplot(acph.pca, data = df_subset, colour = 'treatment')
+a<-autoplot(acph.pca, data = df_subset, colour = 'genotype')
+autoplot(acph.pca, data = df_subset, colour = 'cat')
+
+
+acph.pcal <- prcomp(df_subsetl[,c(4,6:8)], center = TRUE,scale. = TRUE)
+summary(acph.pcal)
+str(acph.pcal)
+autoplot(acph.pcal)
+lta<-autoplot(acph.pcal, data = df_subsetl, colour = 'treatment')
+b<-autoplot(acph.pcal, data = df_subsetl, colour = 'genotype')
+autoplot(acph.pcal, data = df_subsetl, colour = 'cat')
+
+acph.pcai <- prcomp(df_subseti[,c(4:6)], center = TRUE,scale. = TRUE)
+summary(acph.pcai)
+str(acph.pcai)
+autoplot(acph.pcai)
+ita<-autoplot(acph.pcai, data = df_subseti, colour = 'treatment')
+c<-autoplot(acph.pcai, data = df_subseti, colour = 'genotype')
+autoplot(acph.pcai, data = df_subseti, colour = 'cat')
+
+acph.pcail <- prcomp(df_subsetil[,c(4:6)], center = TRUE,scale. = TRUE)
+summary(acph.pcail)
+str(acph.pcail)
+autoplot(acph.pcail)
+ilta<-autoplot(acph.pcail, data = df_subsetil, colour = 'treatment')
+d<-autoplot(acph.pcail, data = df_subsetil, colour = 'genotype')
+autoplot(acph.pcail, data = df_subsetil, colour = 'cat')
+
+
+acph.pcaa <- prcomp(df_pca[,c(4,5,7)], center = TRUE,scale. = TRUE)
+summary(acph.pcaa)
+str(acph.pcaa)
+autoplot(acph.pcaa)
+ata<-autoplot(acph.pcaa, data =df_pca, colour = 'treatment')
+e<-autoplot(acph.pcaa, data =df_pca, colour = 'genotype')
+autoplot(acph.pcaa, data =df_pca, colour = 'cat')
+
+
+acph.pcaal <- prcomp(df_pcal[,c(4,6,7)], center = TRUE,scale. = TRUE)
+summary(acph.pcaal)
+str(acph.pcaal)
+autoplot(acph.pcaal)
+atal<-autoplot(acph.pcaal, data =df_pcal, colour = 'treatment')
+f<-autoplot(acph.pcaal, data =df_pcal, colour = 'genotype')
+autoplot(acph.pcaal, data =df_pcal, colour = 'cat')
+
+
+plot_grid(ta,lta,ita,ilta,ata,atal)
+plot_grid(a,b,c,d,e,f)
+
+```
+
+
+```{r}
+#Joing tables
+
+CAP <- df[,c(1:3,5,15, 22, 23)]
+CAPi<-df_i[,c(1:3,5,15,20, 24)]
+Cpa<-rbind(CAP,CAPi)
+
+CPAl <- df[,c(1:3, 20, 22,24,26)]
+CPAli<-df_i[,c(1:3, 21:24)]
+Cpal<-rbind(CPAl,CPAli)
+
+```
+
+
+Correlation matrixes nonlogged 
+```{r}
+
+
+## specific treatments dataframes
+C_df <- subset(df_90, treatment == "Tc") # s
+S_df <- subset(df_90, treatment == "T1") # s
+F_df <- subset(df_90, treatment == "T2") # p
+I_df <- subset(df_90, treatment == "T3") # a
+
+## create matrix for correlations by treatment
+C_corr_df2 <- rcorr(as.matrix(C_df[, c(4:6,8)])) #
+C_corr_df2 # correlation matrix
+C_corr_df2$r  # R2 of all correlations
+C_corr_df2$P  # P value of all correlations
+C_corr_df2$r[C_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+S_corr_df2 <- rcorr(as.matrix(S_df[, c(4:6,8)])) #
+S_corr_df2 # correlation matrix
+S_corr_df2$r  # R2 of all correlations
+S_corr_df2$P  # P value of all correlations
+S_corr_df2$r[S_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+F_corr_df2 <- rcorr(as.matrix(F_df[, c(4:6,8)])) #
+F_corr_df2 # correlation matrix
+F_corr_df2$r  # R2 of all correlations
+F_corr_df2$P  # P value of all correlations
+F_corr_df2$r[F_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+I_corr_df2 <- rcorr(as.matrix(I_df[, c(4:6,8)])) #
+I_corr_df2 # correlation matrix
+I_corr_df2$r  # R2 of all correlations
+I_corr_df2$P  # P value of all correlations
+I_corr_df2$r[I_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+## specific genotypes dataframes
+K2_df <- subset(df_90, genotype == "K2") # s
+M5_df <- subset(df_90, genotype == "M5") # s
+M6_df <- subset(df_90, genotype == "M6") # p
+
+## create matrix for correlations by genotype
+K2_corr_df2 <- rcorr(as.matrix(K2_df[, c(4:6,8)])) #
+K2_corr_df2 # correlation matrix
+K2_corr_df2$r  # R2 of all correlations
+K2_corr_df2$P  # P value of all correlations
+K2_corr_df2$r[K2_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M5_corr_df2 <- rcorr(as.matrix(M5_df[, c(4:6,8)])) #
+M5_corr_df2 # correlation matrix
+M5_corr_df2$r  # R2 of all correlations
+M5_corr_df2$P  # P value of all correlations
+M5_corr_df2$r[M5_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M6_corr_df2 <- rcorr(as.matrix(M6_df[, c(4:6,8)])) #
+M6_corr_df2 # correlation matrix
+M6_corr_df2$r  # R2 of all correlations
+M6_corr_df2$P  # P value of all correlations
+M6_corr_df2$r[M6_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+```
+
+Correlation MAtrixes for logged data
+
+```{r}
+## specific treatments dataframes
+C_dfl <- subset(df_90l, treatment == "Tc") # s
+S_dfl <- subset(df_90l, treatment == "T1") # s
+F_dfl <- subset(df_90l, treatment == "T2") # p
+I_dfl <- subset(df_90l, treatment == "T3") # a
+
+## create matrix for correlations by treatment
+C_corr_df2l <- rcorr(as.matrix(C_dfl[, c(4, 6:8)])) #
+C_corr_df2l # correlation matrix
+C_corr_df2l$r  # R2 of all correlations
+C_corr_df2l$P  # P value of all correlations
+C_corr_df2l$r[C_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+S_corr_df2l <- rcorr(as.matrix(S_dfl[, c(4, 6:8)])) #
+S_corr_df2l # correlation matrix
+S_corr_df2l$r  # R2 of all correlations
+S_corr_df2l$P  # P value of all correlations
+S_corr_df2l$r[S_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+F_corr_df2l <- rcorr(as.matrix(F_dfl[, c(4, 6:8)])) #
+F_corr_df2l # correlation matrix
+F_corr_df2l$r  # R2 of all correlations
+F_corr_df2l$P  # P value of all correlations
+F_corr_df2l$r[F_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+I_corr_df2l <- rcorr(as.matrix(I_dfl[, c(4, 6:8)])) #
+I_corr_df2l # correlation matrix
+I_corr_df2l$r  # R2 of all correlations
+I_corr_df2l$P  # P value of all correlations
+I_corr_df2l$r[I_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+## specific genotypes dataframes
+K2_dfl <- subset(df_90l, genotype == "K2") # s
+M5_dfl <- subset(df_90l, genotype == "M5") # s
+M6_dfl <- subset(df_90l, genotype == "M6") # p
+
+## create matrix for correlations by genotype
+K2_corr_df2l <- rcorr(as.matrix(K2_dfl[, c(4, 6:8)])) #
+K2_corr_df2l # correlation matrix
+K2_corr_df2l$r  # R2 of all correlations
+K2_corr_df2l$P  # P value of all correlations
+K2_corr_df2l$r[K2_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M5_corr_df2l <- rcorr(as.matrix(M5_dfl[, c(4, 6:8)])) #
+M5_corr_df2l # correlation matrix
+M5_corr_df2l$r  # R2 of all correlations
+M5_corr_df2l$P  # P value of all correlations
+M5_corr_df2l$r[M5_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M6_corr_df2l <- rcorr(as.matrix(M6_dfl[, c(4, 6:8)])) #
+M6_corr_df2l # correlation matrix
+M6_corr_df2l$r  # R2 of all correlations
+M6_corr_df2l$P  # P value of all correlations
+M6_corr_df2l$r[M6_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+```
+
+Correlation for Cat for (no inital)
+```{r}
+
+df_90
+## create matrix for correlations by all
+corr_df2 <- rcorr(as.matrix(df_90[, c(4:6,8)])) #
+corr_df2 # correlation matrix
+corr_df2$r  # R2 of all correlations
+corr_df2$P  # P value of all correlations
+corr_df2$r[corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+
+df_90l
+## create matrix for correlations by all logged
+corr_df2l <- rcorr(as.matrix(df_90l[, c(4,6:8)])) #
+corr_df2l # correlation matrix
+corr_df2l$r  # R2 of all correlations
+corr_df2l$P  # P value of all correlations
+corr_df2l$r[corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+```
+
+```{r}
+df_pcal
+df_pca
+
+all_corr_df2 <- rcorr(as.matrix(df_pca[, c(4,5,7)])) #
+all_corr_df2 # correlation matrix
+all_corr_df2$r  # R2 of all correlations
+all_corr_df2$P  # P value of all correlations
+all_corr_df2$r[all_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+all_corr_dfl2 <- rcorr(as.matrix(df_pcal[, c(4,6,7)])) #
+all_corr_dfl2 # correlation matrix
+all_corr_dfl2$r  # R2 of all correlations
+all_corr_dfl2$P  # P value of all correlations
+all_corr_dfl2$r[all_corr_dfl2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+sp_corr_dfl2 <- rcorr(as.matrix(c[, c(4,5,7:8)])) #
+sp_corr_dfl2 # correlation matrix
+sp_corr_dfl2$r  # R2 of all correlations
+sp_corr_dfl2$P  # P value of all correlations
+sp_corr_dfl2$r[sp_corr_dfl2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+## specific genotypes dataframes
+K2a_df <- subset(df_pca, genotype == "K2") # s
+M5a_df <- subset(df_pca, genotype == "M5") # s
+M6a_df <- subset(df_pca, genotype == "M6") # p
+
+
+## create matrix for correlations by genotype
+K2a_corr_df2 <- rcorr(as.matrix(K2a_df[, c(4,5,7)])) #
+K2a_corr_df2 # correlation matrix
+K2a_corr_df2$r  # R2 of all correlations
+K2a_corr_df2$P  # P value of all correlations
+K2a_corr_df2$r[K2a_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M5a_corr_df2 <- rcorr(as.matrix(M5a_df[, c(4,5,7)])) #
+M5a_corr_df2 # correlation matrix
+M5a_corr_df2$r  # R2 of all correlations
+M5a_corr_df2$P  # P value of all correlations
+M5a_corr_df2$r[M5a_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M6a_corr_df2 <- rcorr(as.matrix(M6a_df[, c(4,5,7)])) #
+M6a_corr_df2 # correlation matrix
+M6a_corr_df2$r  # R2 of all correlations
+M6a_corr_df2$P  # P value of all correlations
+M6a_corr_df2$r[M6a_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+## specific genotypes dataframes
+K2a_dfl <- subset(df_pcal, genotype == "K2") # s
+M5a_dfl <- subset(df_pcal, genotype == "M5") # s
+M6a_dfl <- subset(df_pcal, genotype == "M6") # p
+
+## create matrix for correlations by genotype
+K2a_corr_df2l <- rcorr(as.matrix(K2a_dfl[, c(4,6,7)])) #
+K2a_corr_df2l # correlation matrix
+K2a_corr_df2l$r  # R2 of all correlations
+K2a_corr_df2l$P  # P value of all correlations
+K2a_corr_df2l$r[K2a_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M5a_corr_df2l <- rcorr(as.matrix(M5a_dfl[, c(4,6,7)])) #
+M5a_corr_df2l # correlation matrix
+M5a_corr_df2l$r  # R2 of all correlations
+M5a_corr_df2l$P  # P value of all correlations
+M5a_corr_df2l$r[M5a_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M6a_corr_df2l <- rcorr(as.matrix(M6a_dfl[, c(4,6,7)])) #
+M6a_corr_df2l # correlation matrix
+M6a_corr_df2l$r  # R2 of all correlations
+M6a_corr_df2l$P  # P value of all correlations
+M6a_corr_df2l$r[M6a_corr_df2l$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+```
+
+Parameters with statistical analyses taken from Acropora Dataclean Ecopys
+```{r}
+# select columns of interest only
+#df_sp <- df[,c(1:3, 19:20, 22, 24, 26)] 
+df_sp<-df[,c(1:3, 5,15, 22,24:25)]
+
+data.table::setnames(df_sp, old = c('protein_3d_ug_cm2','chl_ug_cm2', 'logpercent_growth', 'logzoo'), new = c('Pro','Chlo','Growth','Zoox'))
+df_sp
+
+## specific treatments dataframes
+C_dfsp <- subset(df_sp, treatment == "Tc") # s
+S_dfsp <- subset(df_sp, treatment == "T1") # s
+F_dfsp <- subset(df_sp, treatment == "T2") # p
+I_dfsp <- subset(df_sp, treatment == "T3") # a
+
+## create matrix for correlations by treatment
+Csp_corr_df2 <- rcorr(as.matrix(C_dfsp[, c(4, 5,7:8)])) #
+Csp_corr_df2 # correlation matrix
+Csp_corr_df2$r  # R2 of all correlations
+Csp_corr_df2$P  # P value of all correlations
+Csp_corr_df2$r[Csp_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+Ssp_corr_df2 <- rcorr(as.matrix(S_dfsp[, c(4, 5,7:8)])) #
+Ssp_corr_df2 # correlation matrix
+Ssp_corr_df2$r  # R2 of all correlations
+Ssp_corr_df2$P  # P value of all correlations
+Ssp_corr_df2$r[Ssp_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+Fsp_corr_df2 <- rcorr(as.matrix(F_dfsp[, c(4, 5,7:8)])) #
+Fsp_corr_df2 # correlation matrix
+Fsp_corr_df2$r  # R2 of all correlations
+Fsp_corr_df2$P  # P value of all correlations
+Fsp_corr_df2$r[Fsp_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+Isp_corr_df2 <- rcorr(as.matrix(I_dfsp[, c(4, 5,7:8)])) #
+Isp_corr_df2 # correlation matrix
+Isp_corr_df2$r  # R2 of all correlations
+Isp_corr_df2$P  # P value of all correlations
+Isp_corr_df2$r[Isp_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+## specific genotypes dataframes
+K2sp_df <- subset(df_sp, genotype == "K2") # s
+M5sp_df <- subset(df_sp, genotype == "M5") # s
+M6sp_df <- subset(df_sp, genotype == "M6") # p
+
+## create matrix for correlations by genotype
+K2sp_corr_df2 <- rcorr(as.matrix(K2sp_df[, c(4, 5,7:8)])) #
+K2sp_corr_df2 # correlation matrix
+K2sp_corr_df2$r  # R2 of all correlations
+K2sp_corr_df2$P  # P value of all correlations
+K2sp_corr_df2$r[K2sp_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M5sp_corr_df2 <- rcorr(as.matrix(M5sp_df[, c(4, 5,7:8)])) #
+M5sp_corr_df2 # correlation matrix
+M5sp_corr_df2$r  # R2 of all correlations
+M5sp_corr_df2$P  # P value of all correlations
+M5sp_corr_df2$r[M5sp_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+M6sp_corr_df2 <- rcorr(as.matrix(M6sp_df[, c(4, 5,7:8)])) #
+M6sp_corr_df2 # correlation matrix
+M6sp_corr_df2$r  # R2 of all correlations
+M6sp_corr_df2$P  # P value of all correlations
+M6sp_corr_df2$r[M6sp_corr_df2$r < 0] <- 0 # this just makes negative correlations 0 since none are significant (easier for plotting)
+
+```
+
+
+```{r correlation matrix plot method 1, eval=FALSE, include=FALSE}
+### This is the first method of a correlation plot. 
+# Control
+corrplot(C_corr_df2$r, type="upper", order="hclust", p.mat = C_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+C_corr_plot <- grid.grab()
+# Sprinkler
+corrplot(S_corr_df2$r, type="upper", order="hclust", p.mat = S_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+S_corr_plot <- grid.grab()
+# Feeding
+corrplot(F_corr_df2$r, type="upper", order="hclust", p.mat = F_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+F_corr_plot <- grid.grab()
+# Interactive
+corrplot(I_corr_df2$r, type="upper", order="hclust", p.mat = I_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+I_corr_plot <- grid.grab()
+#grid.draw(P1)
+plot_grid(C_corr_plot, S_corr_plot,F_corr_plot, I_corr_plot, ncol = 2)
+```
+
+
+```{r}
+# K2
+corrplot(K2_corr_df2$r, type="upper", order="hclust", p.mat = K2_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+K2_corr_plot <- grid.grab()
+# M5
+corrplot(M5_corr_df2$r, type="upper", order="hclust", p.mat = M5_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M5_corr_plot <- grid.grab()
+# M6
+corrplot(M6_corr_df2$r, type="upper", order="hclust", p.mat = M6_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M6_corr_plot <- grid.grab()
+#grid.draw(P1)
+plot_grid(K2_corr_plot, M5_corr_plot, M6_corr_plot, ncol = 1, labels= "AUTO")
+```
+
+Correlation plot with logged data
+```{r correlation matrix plot method 1, eval=FALSE, include=FALSE}
+### This is the first method of a correlation plot. 
+# Control
+corrplot(C_corr_df2l$r, type="upper", order="hclust", p.mat = C_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+C_corr_plotl <- grid.grab()
+# Sprinkler
+corrplot(S_corr_df2l$r, type="upper", order="hclust", p.mat = S_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+S_corr_plotl <- grid.grab()
+# Feeding
+corrplot(F_corr_df2l$r, type="upper", order="hclust", p.mat = F_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+F_corr_plotl <- grid.grab()
+# Interactive
+corrplot(I_corr_df2l$r, type="upper", order="hclust", p.mat = I_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+I_corr_plotl <- grid.grab()
+#grid.draw(P1)
+plot_grid(C_corr_plotl, S_corr_plotl,F_corr_plotl, I_corr_plotl, ncol = 2)
+```
+
+
+```{r}
+# K2
+corrplot(K2_corr_df2l$r, type="upper", order="hclust", p.mat = K2_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+K2_corr_plotl <- grid.grab()
+# M5
+corrplot(M5_corr_df2l$r, type="upper", order="hclust", p.mat = M5_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M5_corr_plotl <- grid.grab()
+# M6
+corrplot(M6_corr_df2l$r, type="upper", order="hclust", p.mat = M6_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M6_corr_plotl <- grid.grab()
+#grid.draw(P1)
+plot_grid(K2_corr_plotl, M5_corr_plotl, M6_corr_plotl, ncol = 1, labels= "AUTO")
+```
+
+All treatments (including inital points (n=3))
+```{r}
+ 
+corrplot(all_corr_df2$r, type="upper", order="hclust", p.mat = all_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+all_corr_plot <- grid.grab()
+
+corrplot(all_corr_dfl2$r, type="upper", order="hclust", p.mat = all_corr_dfl2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+all_corr_plotl <- grid.grab()
+plot_grid(all_corr_plot,all_corr_plotl, ncol = 1, labels= "AUTO")
+
+# K2
+corrplot(K2a_corr_df2$r, type="upper", order="hclust", p.mat = K2a_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+K2a_corr_plot <- grid.grab()
+# M5
+corrplot(M5a_corr_df2$r, type="upper", order="hclust", p.mat = M5a_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M5a_corr_plot <- grid.grab()
+# M6
+corrplot(M6a_corr_df2$r, type="upper", order="hclust", p.mat = M6a_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M6a_corr_plot<- grid.grab()
+#grid.draw(P1)
+plot_grid(K2a_corr_plot, M5a_corr_plot, M6a_corr_plot, ncol = 1, labels= "AUTO")
+
+#logged
+# K2
+corrplot(K2a_corr_df2l$r, type="upper", order="hclust", p.mat = K2a_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+K2a_corr_plotl <- grid.grab()
+# M5
+corrplot(M5a_corr_df2l$r, type="upper", order="hclust", p.mat = M5a_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M5a_corr_plotl <- grid.grab()
+# M6
+corrplot(M6a_corr_df2l$r, type="upper", order="hclust", p.mat = M6a_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M6a_corr_plotl <- grid.grab()
+#grid.draw(P1)
+plot_grid(K2a_corr_plotl, M5a_corr_plotl, M6a_corr_plotl, ncol = 1, labels= "AUTO")
+```
+
+
+All treatments (with sp data)
+```{r}
+
+corrplot(Csp_corr_df2$r, type="upper", order="hclust", p.mat = Csp_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+Csp_corr_plot <- grid.grab()
+
+corrplot(Ssp_corr_df2$r, type="upper", order="hclust", p.mat = Ssp_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+Ssp_corr_plot <- grid.grab()
+
+corrplot(Fsp_corr_df2$r, type="upper", order="hclust", p.mat = Fsp_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+Fsp_corr_plot <- grid.grab()
+
+corrplot(Isp_corr_df2$r, type="upper", order="hclust", p.mat = Isp_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+Isp_corr_plot <- grid.grab()
+
+plot_grid(Csp_corr_plot, Ssp_corr_plot, Fsp_corr_plot, Isp_corr_plot, ncol = 2, labels= "AUTO")
+
+# K2
+corrplot(K2sp_corr_df2$r, type="upper", order="hclust", p.mat = K2sp_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+K2sp_corr_plot <- grid.grab()
+
+# M5
+corrplot(M5sp_corr_df2$r, type="upper", order="hclust", p.mat = M5sp_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M5sp_corr_plot <- grid.grab()
+
+# M6
+corrplot(M6sp_corr_df2$r, type="upper", order="hclust", p.mat = M6sp_corr_df2$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M6sp_corr_plot<- grid.grab()
+
+#grid.draw(P1)
+plot_grid(K2sp_corr_plot, M5sp_corr_plot, M6sp_corr_plot, ncol = 1, labels= "AUTO")
+```
+
+
+```{r}
+#logged
+# K2
+corrplot(K2a_corr_df2l$r, type="upper", order="hclust", p.mat = K2a_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+K2a_corr_plotl <- grid.grab()
+# M5
+corrplot(M5a_corr_df2l$r, type="upper", order="hclust", p.mat = M5a_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M5a_corr_plotl <- grid.grab()
+# M6
+corrplot(M6a_corr_df2l$r, type="upper", order="hclust", p.mat = M6a_corr_df2l$P, sig.level = 0.05, insig = "p-value", method = "ellipse", tl.col = "black")
+grid.echo()
+M6a_corr_plotl <- grid.grab()
+#grid.draw(P1)
+plot_grid(K2a_corr_plotl, M5a_corr_plotl, M6a_corr_plotl, ncol = 1, labels= "AUTO")
+```
+
+```{r actual correlation matrix plot}
+## Final correlation plot (and saving it as PDF)
+# Rmarkdown plotting version
+par(mfrow=c(2,2))
+corrplot.mixed(C_corr_df2$r, upper = "ellipse", p.mat = C_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "Control", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(S_corr_df2$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "Sprinkler", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(F_corr_df2$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "Feeding", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(I_corr_df2$r, upper = "ellipse",  p.mat = I_corr_df2$P,  insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "Interactive", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+# genotype
+corrplot.mixed(K2_corr_df2$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "K2", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M5_corr_df2$r, upper = "ellipse",  p.mat = M5_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "M5", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M6_corr_df2$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "M6", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+#Cat
+corrplot.mixed(C_corr_df2$r, upper = "ellipse", p.mat = C_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "Control", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+```
+
+
+```{r actual correlation matrix plot}
+## Final correlation plot (and saving it as PDF)
+# Rmarkdown plotting version
+par(mfrow=c(2,2))
+corrplot.mixed(C_corr_df2l$r, upper = "ellipse", sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "Control", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(S_corr_df2l$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "Sprinkler", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(F_corr_df2l$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "Feeding", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(I_corr_df2l$r, upper = "ellipse",  p.mat = I_corr_df2l$P,  insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "Interactive", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+# genotype
+corrplot.mixed(K2_corr_df2l$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "K2", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M5_corr_df2l$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "M5", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M6_corr_df2l$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "M6", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+```
+
+```{r}
+# genotype
+corrplot.mixed(K2a_corr_df2$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "K2", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M5a_corr_df2$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "M5", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M6a_corr_df2$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "M6", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+# genotype
+corrplot.mixed(K2a_corr_df2l$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "K2", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M5a_corr_df2l$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "M5", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M6a_corr_df2l$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "M6", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+# Cat
+corr_df2
+
+corrplot.mixed(corr_df2$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "All", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corr_df2l
+
+corrplot.mixed(corr_df2l$r, upper = "ellipse",  sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1.5, title = "All Logged", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+
+```
+
+
+<br/>
+
+**Figure 2.** Correlation matrix for treatments and genotypes depicting pair-wise comparisons of physiological parameters within each treatment and across each genotype Colour and ellipse width denote R^2^ of each significant comparison, and blank grids represent non-significant pair-wise comparisons (*P* > 0.05).Each parameter is denoted in <span style="color: #0072B2;">blue</span> text along the diagonal of each plot. Correlations with R^2^ above 0.5 (shown in <span style="color: #E67D00;">orange</span> and <span style="color: #F21A00;">red</span> in matrix plot) are explored further below.
+
+<br/>
+
+```{r save correlation plot, message=FALSE, warning=FALSE, include=FALSE}
+# below saves the figure
+
+par(mfrow=c(2,2))
+
+corrplot.mixed(C_corr_df2$r, upper = "ellipse", number.cex = 0.8, p.mat = C_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title ="Control", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(S_corr_df2$r, upper = "ellipse", number.cex = 0.8, p.mat = S_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "Sprinkler", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(F_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = F_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "Feeding", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(I_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = I_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "Interactive", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+#Genotype
+corrplot.mixed(K2_corr_df2$r, upper = "ellipse", number.cex = 0.8, p.mat = K2_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "K2", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M5_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = M5_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M5", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M6_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = M6_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M6", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+### Logged
+corrplot.mixed(C_corr_df2l$r, upper = "ellipse", number.cex = 0.8, p.mat = C_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title ="Control", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(S_corr_df2l$r, upper = "ellipse", number.cex = 0.8, p.mat = S_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "Sprinkler", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(F_corr_df2l$r, upper = "ellipse",  number.cex = 0.8, p.mat = F_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "Feeding", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(I_corr_df2l$r, upper = "ellipse",  number.cex = 0.8, p.mat = I_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "Interactive", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+#Genotype
+corrplot.mixed(K2_corr_df2l$r, upper = "ellipse", number.cex = 0.8, p.mat = K2_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "K2", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M5_corr_df2l$r, upper = "ellipse",  number.cex = 0.8, p.mat = M5_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M5", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M6_corr_df2l$r, upper = "ellipse",  number.cex = 0.8, p.mat = M6_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M6", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+#Genotype all treat (inital)
+corrplot.mixed(K2a_corr_df2$r, upper = "ellipse", number.cex = 0.8, p.mat = K2a_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "K2", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M5a_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = M5a_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M5", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M6a_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = M6a_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M6", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+#Genotype logged
+corrplot.mixed(K2a_corr_df2l$r, upper = "ellipse", number.cex = 0.8, p.mat = K2a_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "K2", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M5a_corr_df2l$r, upper = "ellipse",  number.cex = 0.8, p.mat = M5a_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M5", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M6a_corr_df2l$r, upper = "ellipse",  number.cex = 0.8, p.mat = M6a_corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M6", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+
+corrplot.mixed(corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "All", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(corr_df2l$r, upper = "ellipse",  number.cex = 0.8, p.mat = corr_df2l$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "All Logged", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+### SP parameter data treatment
+
+corrplot.mixed(Csp_corr_df2$r, upper = "ellipse", number.cex = 0.8, p.mat = Csp_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title ="Control", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(Ssp_corr_df2$r, upper = "ellipse", number.cex = 0.8, p.mat = Ssp_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "Sprinkler", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(Fsp_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = Fsp_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "Feeding", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(Isp_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = Isp_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "Interactive", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+#Genotype SP
+corrplot.mixed(K2sp_corr_df2$r, upper = "ellipse", number.cex = 0.8, p.mat = K2sp_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "K2", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M5sp_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = M5sp_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M5", cl.lim = c(-1,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+corrplot.mixed(M6sp_corr_df2$r, upper = "ellipse",  number.cex = 0.8, p.mat = M6sp_corr_df2$P, sig.level = c(.001, .01, .05), insig = "blank", tl.col = "#0072B2", tl.cex = 1, title = "M6", cl.lim = c(0,1), mar=c(0,0,1,0), cl.align.text = "l")
+
+```
+
+
+```{r SSID scatter plots, fig.width = 7, fig.height = 12}
+C_df
+S_df
+F_df
+I_df
+K2_df
+M5_df
+M6_df
+C_dfl 
+S_dfl 
+F_dfl 
+I_dfl 
+K2_dfl
+M5_dfl
+M6_dfl
+df_pca
+df_pcal
+C_dfsp
+S_dfsp
+F_dfsp
+I_dfsp
+K2sp_df
+M5sp_df
+M6sp_df
+
+C_denVrate <- ggplot(data = df_90, aes(x =treatment , y =Zoox , group = genotype)) +
+  theme_classic() +
+  theme(legend.position = "none") +
+  xlab("Treatment") + 
+  ylab(dlab) +
+  #scale_colour_manual("pCO2", labels = c("pre industrial", "current", "end-of-century", "extreme"), values = c("#b2abd2", "#5e3c99", "#fdb863", "#e66101")) +
+  #scale_shape_manual("temperature", labels = c("28C", "31C"), values = c(19,1)) +
+  #\geom_smooth(method = "lm", aes(group = fpco2), se = FALSE) +
+  stat_cor(label.y = -0.5, label.x = 3.9) +
+  stat_regline_equation(label.y = -0.7, label.x = 3.9) +
+  geom_point()
+C_denVrate
+```
+
+
+```{r}
+# set up the dataframe
+df_subset <- unique(df_subset)# remove any duplicate rows
+ldf_subset <- gather(df_subset, param, value, c(4:6, 8))
+treat_pca_df <- df_subset[,c(4:6, 8)]
+
+# run the adonis
+T_pca_mod <- adonis2(treat_pca_df ~ treatment * genotype, data = df_subset, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#treatment           3   154.68 0.14580 2.9374 0.01998 *
+#genotype            2    92.42 0.08712 2.6327 0.07193 .
+#treatment:genotype  6   181.88 0.17144 1.7269 0.09990 .
+T_pca_mod <- adonis2(treat_pca_df ~ treatment, data = df_subset, by="margin", method = 'eu', permutations = bootnum)
+T_pca_mod # view SSID adonis output
+#  0.04648 *
+# extract pvalues
+T_pval <- T_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+T_pca <- prcomp(treat_pca_df, center = TRUE, scale= TRUE)
+```
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+T_treat_pval <-substitute(italic(P[treatment])==p, list(p = format(T_pval[1,1], digits = 2)))
+#0.041
+
+
+# Treatment
+T_treat_pca <- autoplot(T_pca, data = df_subset, 
+         colour = "treatment",
+         shape = "treatment",
+         fill = "treatment",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0.01,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 4, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE, override.aes = list(linetype = c(0, 0)))) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -0.45, y = -0.35, label = deparse(T_treat_pval), parse = TRUE, size = 3)
+
+T_treat_pca
+ggsave("T_treat_pca.pdf", width = 10, height = 14, units = "in")
+```
+
+```{r}
+
+# set up the dataframe
+df_subset <- unique(df_subset)# remove any duplicate rows
+ldf_subset <- gather(df_subset, param, value, c(4:6, 8))
+geno_pca_df <- df_subset[,c(4:6, 8)]
+
+# run the adonis
+I_pca_mod <- adonis2(geno_pca_df ~ treatment * genotype, data = df_subset, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#treatment           3   154.68 0.14580 2.9374 0.02697 *
+#genotype            2    92.42 0.08712 2.6327 0.06094 .
+#treatment:genotype  6   181.88 0.17144 1.7269 0.07792 .
+G_pca_mod <- adonis2(geno_pca_df ~ genotype, data = df_subset, by="margin", method = 'eu', permutations = bootnum)
+G_pca_mod # view SSID adonis output
+#  0.08796 *
+# extract pvalues
+G_pval <- G_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+G_pca <- prcomp(geno_pca_df, center = TRUE, scale= TRUE)
+```
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+G_geno_pval <-substitute(italic(P[genotype])==p, list(p = format(G_pval[1,1], digits = 2)))
+# 0.11
+
+
+# Treatment
+G_geno_pca <- autoplot(G_pca, data = df_subset, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0.01,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 4, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -0.45, y = -0.2, label = deparse(G_geno_pval), parse = TRUE, size = 3)
+
+G_geno_pca
+ggsave("G_geno_pca.pdf", width = 10, height = 14, units = "in")
+
+
+C_pca_mod <- adonis2(geno_pca_df ~ cat, data = df_subset, by="margin", method = 'eu', permutations = bootnum)
+C_pca_mod # view SSID adonis output
+#  0.01649 *  *
+# extract pvalues
+C_pval <- C_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+C_pca <- prcomp(geno_pca_df, center = TRUE, scale= TRUE)
+```
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+C_cat_pval <-substitute(italic(P[cat])==p, list(p = format(C_pval[1,1], digits = 2)))
+# 0.014
+
+
+# Treatment
+C_cat_pca <- autoplot(C_pca, data = df_subset, 
+         colour = "cat",
+         shape = "cat",
+         fill = "cat",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0.01,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 4, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE, override.aes = list(linetype = c(0, 0)))) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -1, y = -.75, label = deparse(C_cat_pval), parse = TRUE, size = 3)
+
+C_cat_pca
+
+ggsave("C_cat_pca.pdf", width = 10, height = 14, units = "in")
+
+plot_grid(G_geno_pca,C_cat_pca,T_treat_pca)
+#########
+
+```
+
+# Genotype difference across treatments (Control)
+```{r}
+C_df
+
+# set up the dataframe
+C_df <- unique(C_df)# remove any duplicate rows
+Cldf_subset <- gather(C_df, param, value, c(4:6, 8))
+Cg_pca_df <- C_df[,c(4:6, 8)]
+
+# run the adonis
+Cg_pca_mod <- adonis2(Cg_pca_df ~  genotype, data = C_df, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#0.5844
+
+# extract pvalues
+Cg_pval <- Cg_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Cg_pca <- prcomp(Cg_pca_df, center = TRUE, scale= TRUE)
+```
+
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Cg_con_pval <-substitute(italic(P[genotype])==p, list(p = format(Cg_pval[1,1], digits = 2)))
+# 0.59
+
+
+# Treatment
+Cg_con_pca <- autoplot(Cg_pca, data = C_df, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0.01,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 4, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -1, y = -.75, label = deparse(Cg_con_pval), parse = TRUE, size = 3)
+
+Cg_con_pca
+
+ggsave("Cg_con_pca.pdf", width = 10, height = 14, units = "in")
+
+```
+
+
+# Genotype difference across treatments (Sprinkler)
+```{r}
+S_df
+
+# set up the dataframe
+S_df <- unique(S_df)# remove any duplicate rows
+Sldf_subset <- gather(S_df, param, value, c(4:6, 8))
+Sg_pca_df <- S_df[,c(4:6, 8)]
+
+# run the adonis
+Sg_pca_mod <- adonis2(Sg_pca_df ~  genotype, data = S_df, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#0.006993
+
+# extract pvalues
+Sg_pval <- Sg_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Sg_pca <- prcomp(Sg_pca_df, center = TRUE, scale= TRUE)
+```
+
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Sg_spr_pval <-substitute(italic(P[genotype])==p, list(p = format(Sg_pval[1,1], digits = 2)))
+# 0.007
+
+
+#
+Sg_spr_pca <- autoplot(Sg_pca, data = S_df, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0.01,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 4, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -1, y = -.75, label = deparse(Sg_spr_pval), parse = TRUE, size = 3)
+
+Sg_spr_pca
+
+ggsave("Sg_spr_pca.pdf", width = 10, height = 14, units = "in")
+
+```
+
+# Genotype difference across treatments (Feeding)
+```{r}
+F_df
+
+# set up the dataframe
+F_df <- unique(F_df)# remove any duplicate rows
+Fldf_subset <- gather(F_df, param, value, c(4:6, 8))
+Fg_pca_df <- F_df[,c(4:6, 8)]
+
+# run the adonis
+Fg_pca_mod <- adonis2(Fg_pca_df ~  genotype, data = F_df, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#0.1788
+
+# extract pvalues
+Fg_pval <- Fg_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Fg_pca <- prcomp(Fg_pca_df, center = TRUE, scale= TRUE)
+```
+
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Fg_fee_pval <-substitute(italic(P[genotype])==p, list(p = format(Fg_pval[1,1], digits = 2)))
+# 0.18
+
+
+#
+Fg_fee_pca <- autoplot(Fg_pca, data = F_df, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0.01,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 4, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -1, y = -.75, label = deparse(Fg_fee_pval), parse = TRUE, size = 3)
+
+Fg_fee_pca
+
+ggsave("Fg_fee_pca.pdf", width = 10, height = 14, units = "in")
+
+```
+
+# Genotype difference across treatments (Interactive)
+```{r}
+I_df
+
+# set up the dataframe
+I_df <- unique(I_df)# remove any duplicate rows
+Ildf_subset <- gather(I_df, param, value, c(4:6, 8))
+Ig_pca_df <- I_df[,c(4:6, 8)]
+
+# run the adonis
+Ig_pca_mod <- adonis2(Ig_pca_df ~  genotype, data = I_df, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#0.3287
+
+# extract pvalues
+Ig_pval <- Ig_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Ig_pca <- prcomp(Ig_pca_df, center = TRUE, scale= TRUE)
+```
+
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Ig_int_pval <-substitute(italic(P[genotype])==p, list(p = format(Ig_pval[1,1], digits = 2)))
+# 0.33
+
+
+#
+Ig_int_pca <- autoplot(Ig_pca, data = I_df, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0.01,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 4, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -1, y = -.75, label = deparse(Ig_int_pval), parse = TRUE, size = 3)
+
+Ig_int_pca
+
+ggsave("Ig_int_pca.pdf", width = 10, height = 14, units = "in")
+
+```
+
+SP data Final PCAs
+df_sp
+
+```{r}
+
+
+
+# set up the dataframe
+df_sp <- unique(df_sp)# remove any duplicate rows
+ldf_sp <- gather(df_sp, param, value, c(4:5, 7:8))
+treat_pca_dfsp <- df_sp[,c(4:5, 7:8)]
+
+# run the adonis
+Tsp_pca_mod <- adonis2(treat_pca_dfsp ~ treatment * genotype, data = df_sp, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#treatment           3    6.576 0.06229 1.0704 0.370629    
+#genotype            2   16.762 0.15880 4.0928 0.007992 ***
+#treatment:genotype  6    8.501 0.08054 0.6919 0.729271
+Tsp_pca_mod <- adonis2(treat_pca_dfsp ~ treatment, data = df_sp, by="margin", method = 'eu', permutations = bootnum)
+Tsp_pca_mod # view SSID adonis output
+#  0.4254
+# extract pvalues
+Tsp_pval <- Tsp_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Tsp_pca <- prcomp(treat_pca_dfsp, center = TRUE, scale= TRUE)
+```
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Tsp_treat_pval <-substitute(italic(P[treatment])==p, list(p = format(Tsp_pval[1,1], digits = 2)))
+#0.34
+
+
+# Treatment
+Tsp_treat_pca <- autoplot(Tsp_pca, data = df_sp, 
+         colour = "treatment",
+         shape = "treatment",
+         fill = "treatment",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+   scale_color_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+ scale_fill_discrete( labels=c("Sprinkler", "Feeding", "Interactive","Control"))+
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE, override.aes = list(linetype = c(0, 0)))) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -0.45, y = -0.35, label = deparse(Tsp_treat_pval), parse = TRUE, size = 3)
+
+Tsp_treat_pca
+ggsave("Tsp_treat_pca.pdf")
+```
+
+```{r}
+
+# set up the dataframe
+df_sp <- unique(df_sp)# remove any duplicate rows
+ldf_sp <- gather(df_sp, param, value, c(4:5, 7:8))
+geno_pca_dfsp <- df_sp[,c(4:5, 7:8)]
+
+
+Gsp_pca_mod <- adonis2(geno_pca_dfsp ~ genotype, data = df_sp, by="margin", method = 'eu', permutations = bootnum)
+Gsp_pca_mod # view SSID adonis output
+#  0.0064978 *
+# extract pvalues
+Gsp_pval <- Gsp_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Gsp_pca <- prcomp(geno_pca_dfsp, center = TRUE, scale= TRUE)
+```
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Gsp_geno_pval <-substitute(italic(P[genotype])==p, list(p = format(Gsp_pval[1,1], digits = 2)))
+# 0.0065
+
+
+# Treatment
+Gsp_geno_pca <- autoplot(Gsp_pca, data = df_sp, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -0.4, y = -0.4, label = deparse(Gsp_geno_pval), parse = TRUE, size = 3)
+
+Gsp_geno_pca
+ggsave("Gsp_geno_pca.pdf")
+
+
+Csp_pca_mod <- adonis2(geno_pca_dfsp ~ cat, data = df_sp, by="margin", method = 'eu', permutations = bootnum)
+Csp_pca_mod # view SSID adonis output
+#   0.1404 *  *
+# extract pvalues
+Csp_pval <- Csp_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Csp_pca <- prcomp(geno_pca_dfsp, center = TRUE, scale= TRUE)
+```
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Csp_cat_pval <-substitute(italic(P[cat])==p, list(p = format(Csp_pval[1,1], digits = 2)))
+# 0.14
+
+
+# Interactive
+Csp_cat_pca <- autoplot(Csp_pca, data = df_sp, 
+         colour = "cat",
+         fill = "cat",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = -4, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE, override.aes = list(linetype = c(0, 0)))) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -.75, y = -.75, label = deparse(Csp_cat_pval), parse = TRUE, size = 3)
+
+Csp_cat_pca
+
+ggsave("Csp_cat_pca.pdf")
+
+plot_grid(Gsp_geno_pca,Csp_cat_pca,Tsp_treat_pca)
+#########
+
+```
+
+# Genotype difference across treatments (Control)
+```{r}
+C_dfsp
+
+# set up the dataframe
+C_dfsp <- unique(C_dfsp)# remove any duplicate rows
+Cldf_sp <- gather(C_dfsp, param, value, c(4:5, 7:8))
+Cg_pca_dfsp <- C_dfsp[,c(4:5, 7:8)]
+
+# run the adonis
+Cspg_pca_mod <- adonis2(Cg_pca_dfsp ~  genotype, data = C_dfsp, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#0.2198
+
+# extract pvalues
+Cspg_pval <- Cspg_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Cspg_pca <- prcomp(Cg_pca_dfsp, center = TRUE, scale= TRUE)
+```
+
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Cspg_con_pval <-substitute(italic(P[genotype])==p, list(p = format(Cspg_pval[1,1], digits = 2)))
+# 0.22
+
+
+# Treatment
+Cspg_con_pca <- autoplot(Cspg_pca, data = C_dfsp, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust =-.5,
+         loadings.label.repel = TRUE) +
+    scale_fill_manual(values = c('red','green4', 'blue'))+
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -1, y = -1, label = deparse(Cspg_con_pval), parse = TRUE, size = 3)
+
+Cspg_con_pca
+
+ggsave("Cspg_con_pca.pdf")
+
+```
+
+
+# Genotype difference across treatments (Sprinkler)
+```{r}
+S_dfsp
+
+# set up the dataframe
+S_dfsp <- unique(S_dfsp)# remove any duplicate rows
+Sldf_sp <- gather(S_dfsp, param, value, c(4:5,7:8))
+Sg_pca_dfsp <- S_dfsp[,c(4:5,7:8)]
+
+# run the adonis
+Sspg_pca_mod <- adonis2(Sg_pca_dfsp ~  genotype, data = S_dfsp, method = 'eu', permutations = 1000)
+#0.1109
+
+# extract pvalues
+Sspg_pval <- Sspg_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Sspg_pca <- prcomp(Sg_pca_dfsp, center = TRUE, scale= TRUE)
+```
+
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Sspg_spr_pval <-substitute(italic(P[genotype])==p, list(p = format(Sspg_pval[1,1], digits = 2)))
+# 0.089
+
+
+#
+Sspg_spr_pca <- autoplot(Sspg_pca, data = S_dfsp, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 1,
+         loadings.label.repel = TRUE) +
+      scale_fill_manual(values = c('red','green4', 'blue'))+
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -1, y = -1.5, label = deparse(Sspg_spr_pval), parse = TRUE, size = 3)
+
+Sspg_spr_pca
+
+ggsave("Sspg_spr_pca.pdf")
+
+```
+
+# Genotype difference across treatments (Feeding)
+```{r}
+F_dfsp
+
+# set up the dataframe
+F_dfsp <- unique(F_dfsp)# remove any duplicate rows
+Fldf_sp <- gather(F_dfsp, param, value, c(4:5,7:8))
+Fg_pca_dfsp <- F_dfsp[,c(4:5,7:8)]
+
+# run the adonis
+Fspg_pca_mod <- adonis2(Fg_pca_dfsp ~  genotype, data = F_dfsp, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#0.3107
+
+# extract pvalues
+Fspg_pval <- Fspg_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Fspg_pca <- prcomp(Fg_pca_dfsp, center = TRUE, scale= TRUE)
+```
+
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Fspg_fee_pval <-substitute(italic(P[genotype])==p, list(p = format(Fspg_pval[1,1], digits = 2)))
+# 0.31
+
+
+#
+Fspg_fee_pca <- autoplot(Fspg_pca, data = F_dfsp, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = -.5, 
+         loadings.label.vjust = .5,
+         loadings.label.repel = TRUE) +
+        scale_fill_manual(values = c('red','green4', 'blue'))+
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -1, y = -1.2, label = deparse(Fspg_fee_pval), parse = TRUE, size = 3)
+
+Fspg_fee_pca
+
+ggsave("Fspg_fee_pca.pdf")
+
+```
+
+# Genotype difference across treatments (Interactive)
+```{r}
+I_dfsp
+
+# set up the dataframe
+I_dfsp <- unique(I_dfsp)# remove any duplicate rows
+Ildf_sp <- gather(I_dfsp, param, value, c(4:5,7:8))
+Ig_pca_dfsp <- I_dfsp[,c(4:5,7:8)]
+
+# run the adonis
+Ispg_pca_mod <- adonis2(Ig_pca_dfsp ~  genotype, data = I_dfsp, method = 'eu', permutations = 1000) # below is the model with non sig interactions removed:
+#0.3117
+
+# extract pvalues
+Ispg_pval <- Ispg_pca_mod["Pr(>F)"]
+
+# perform principal component analysis (PCA)
+Ispg_pca <- prcomp(Ig_pca_dfsp, center = TRUE, scale= TRUE)
+```
+
+
+```{r SSID PCA plot, fig.height=8, fig.width=8}
+# create labels for p values calculated above
+Ispg_int_pval <-substitute(italic(P[genotype])==p, list(p = format(Ispg_pval[1,1], digits = 2)))
+# 0.31
+
+
+#
+Ispg_int_pca <- autoplot(Ispg_pca, data = I_dfsp, 
+         colour = "genotype",
+         shape = "genotype",
+         fill = "genotype",               
+         frame = TRUE, 
+         frame.type = "norm",
+         frame.alpha = 0,
+         loadings = TRUE, 
+         loadings.colour = "black", 
+         loadings.label = TRUE,
+         loadings.label.colour = "black",         
+         loadings.label.size = 5, 
+         loadings.label.hjust = 1.5, 
+         loadings.label.vjust = 0.5,
+         loadings.label.repel = TRUE) +
+        scale_fill_manual(values = c('red','green4', 'blue'))+
+ # scale_shape_manual("treatment", labels = c("Sprinkler", "Feeding", "Interactive", "Control"), values = c("T1","T2","T3","Tc")) +
+  #scale_colour_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+  #scale_fill_manual("temperature", labels = c("28C", "31C"), values = c("#0072B2", "#D55E00"))+
+    guides(color = guide_legend(keyheight = 0.3, nrow = 4, byrow = TRUE)) +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank(), panel.background=element_blank(),strip.background = element_blank(), panel.border = element_rect(colour = "black", fill=NA, size=1), legend.title = element_blank(), legend.background = element_rect(fill = "transparent", colour = NA)) +
+  annotate("text", x = -1, y = -1, label = deparse(Ispg_int_pval), parse = TRUE, size = 3)
+
+Ispg_int_pca
+
+ggsave("Ispg_int_pca.pdf")
+
+```
+
+
+
+<br/>
+Figure:
+
+```{r}
+## load the protein bootstrapped model output
+df_pro_a <- read.csv("LMER_model_outputs/Protein_model_2021-03-24.csv", head = TRUE)
+df_pro_a$ftemp <- as.factor(df_pro_a$ftemp)
+df_pro_a$fpco2 <- as.factor(df_pro_a$fpco2)
+df_pro_a$species <- factor(df_pro_a$species, levels = c("SSID", "PSTR", "PAST", "UTEN"))
+
+```
+
+
+## Supplemental Tables{.tabset} 
+
+
+```{r protein table}
+pro_tab <- df_pro_a[,c(9,15,18:20)] #subset for species, treatment, parameter, and model values
+pro_tab$binder <- paste(pro_tab$species, pro_tab$treat2, sep = "_")
+T90_pro_mean <- summarySE(data=pro_tab, measurevar = "mean", groupvars = c("species", "treat2", "binder"))
+T90_pro_low <- summarySE(data=pro_tab, measurevar = "lowerci", groupvars = c("species", "treat2", "binder"))
+T90_pro_up <- summarySE(data=pro_tab, measurevar = "upperci", groupvars = c("species", "treat2", "binder"))
+pro_tab <- cbind(T90_pro_mean, T90_pro_low, T90_pro_up)[, c(1,2,4,5,13,21)]
+pro_tab$mean <- round(pro_tab$mean, 2)
+pro_tab$lowerci <- round(pro_tab$lowerci, 2)
+pro_tab$upperci <- round(pro_tab$upperci, 2)
+colnames(pro_tab)[colnames(pro_tab)=="treat2"] <- "treatment"
+colnames(pro_tab)[colnames(pro_tab)=="lowerci"] <- "lower 95%"
+colnames(pro_tab)[colnames(pro_tab)=="upperci"] <- "upper 95%"
+pro_tab$treatment <- factor(pro_tab$treatment, c("T0", "288_28", "311_31", "447_28", "405_31", "673_28", "701_31", "3285_28", "3309_31"))
+table1 <- kable(pro_tab[,-c(1)], booktabs = T, caption = "Table 1. T90 modeled mean coral host protein content and 95% confidence intervals for each  species") %>%
+  kable_styling(font_size = 10, full_width = F) %>% 
+  pack_rows("(a) SSID", 1, 8) %>%
+  pack_rows("(b) PSTR", 9, 16) %>%
+  pack_rows("(c) PAST", 17, 24)
+table1
+```
+
+```{r lipid table}
+lipid_tab <- df_lipid_a[,c(9,15,18:20)] #subset for species, treatment, parameter, and model values
+lipid_tab$binder <- paste(lipid_tab$species, lipid_tab$treat2, sep = "_")
+T90_lipid_mean <- summarySE(data=lipid_tab, measurevar = "mean", groupvars = c("species", "treat2", "binder"))
+T90_lipid_low <- summarySE(data=lipid_tab, measurevar = "lowerci", groupvars = c("species", "treat2", "binder"))
+T90_lipid_up <- summarySE(data=lipid_tab, measurevar = "upperci", groupvars = c("species", "treat2", "binder"))
+lipid_tab <- cbind(T90_lipid_mean, T90_lipid_low, T90_lipid_up)[, c(1,2,4,5,13,21)]
+lipid_tab$mean <- round(lipid_tab$mean, 2)
+lipid_tab$lowerci <- round(lipid_tab$lowerci, 2)
+lipid_tab$upperci <- round(lipid_tab$upperci, 2)
+colnames(lipid_tab)[colnames(lipid_tab)=="treat2"] <- "treatment"
+colnames(lipid_tab)[colnames(lipid_tab)=="lowerci"] <- "lower 95%"
+colnames(lipid_tab)[colnames(lipid_tab)=="upperci"] <- "upper 95%"
+lipid_tab$treatment <- factor(lipid_tab$treatment, c("T0", "288_28", "311_31", "447_28", "405_31", "673_28", "701_31", "3285_28", "3309_31"))
+table2 <- kable(lipid_tab[,-c(1)], booktabs = T, caption = "Table 2. T90 modeled mean coral host lipid content and 95% confidence intervals for each  species") %>%
+  kable_styling(font_size = 10, full_width = F) %>% 
+  pack_rows("(a) SSID", 1, 8) %>%
+  pack_rows("(b) PSTR", 9, 16) %>%
+  pack_rows("(c) PAST", 17, 24)
+table2
+```
+
+```{r carbohydrate table}
+carb_tab <- df_carb_a[,c(9,15,18:20)] #subset for species, treatment, and model values
+carb_tab$binder <- paste(carb_tab$species, carb_tab$treat2, sep = "_")
+T90_carb_mean <- summarySE(data=carb_tab, measurevar = "mean", groupvars = c("species", "treat2", "binder"))
+T90_carb_low <- summarySE(data=carb_tab, measurevar = "lowerci", groupvars = c("species", "treat2", "binder"))
+T90_carb_up <- summarySE(data=carb_tab, measurevar = "upperci", groupvars = c("species", "treat2", "binder"))
+carb_tab <- cbind(T90_carb_mean, T90_carb_low, T90_carb_up)[, c(1,2,4,5,13,21)]
+carb_tab$mean <- round(carb_tab$mean, 2)
+carb_tab$lowerci <- round(carb_tab$lowerci, 2)
+carb_tab$upperci <- round(carb_tab$upperci, 2)
+colnames(carb_tab)[colnames(carb_tab)=="treat2"] <- "treatment"
+colnames(carb_tab)[colnames(carb_tab)=="lowerci"] <- "lower 95%"
+colnames(carb_tab)[colnames(carb_tab)=="upperci"] <- "upper 95%"
+carb_tab$treatment <- factor(carb_tab$treatment, c("T0", "288_28", "311_31", "447_28", "405_31", "673_28", "701_31", "3285_28", "3309_31"))
+table3 <- kable(carb_tab[,-c(1)], booktabs = T, caption = "Table 3. T90 modeled mean coral host carbohydrate content and 95% confidence intervals for each  species") %>%
+  kable_styling(font_size = 10, full_width = F) %>% 
+  pack_rows("(a) SSID", 1, 8) %>%
+  pack_rows("(b) PSTR", 9, 16) %>%
+  pack_rows("(c) PAST", 17, 24)
+table3
+```
+
+```{r density table}
+den_tab <- df_den_a[,c(9,15,18:20)] #subset for species, treatment, parameter, and model values
+den_tab$binder <- paste(den_tab$species, den_tab$treat2, sep = "_")
+T90_den_mean <- summarySE(data=den_tab, measurevar = "mean", groupvars = c("species", "treat2", "binder"))
+T90_den_low <- summarySE(data=den_tab, measurevar = "lowerci", groupvars = c("species", "treat2", "binder"))
+T90_den_up <- summarySE(data=den_tab, measurevar = "upperci", groupvars = c("species", "treat2", "binder"))
+den_tab <- cbind(T90_den_mean, T90_den_low, T90_den_up)[, c(1,2,4,5,13,21)]
+den_tab$mean <- round(den_tab$mean, 2)
+den_tab$lowerci <- round(den_tab$lowerci, 2)
+den_tab$upperci <- round(den_tab$upperci, 2)
+colnames(den_tab)[colnames(den_tab)=="treat2"] <- "treatment"
+colnames(den_tab)[colnames(den_tab)=="lowerci"] <- "lower 95%"
+colnames(den_tab)[colnames(den_tab)=="upperci"] <- "upper 95%"
+den_tab$treatment <- factor(den_tab$treatment, c("T0", "288_28", "311_31", "447_28", "405_31", "673_28", "701_31", "3285_28", "3309_31"))
+table4 <- kable(den_tab[,-c(1)], booktabs = T, caption = "Table 4. T90 modeled mean algal endosymbiont cell density and 95% confidence intervals for each  species") %>%
+  kable_styling(font_size = 10, full_width = F) %>% 
+  pack_rows("(a) SSID", 1, 8) %>%
+  pack_rows("(b) PSTR", 9, 16) %>%
+  pack_rows("(c) PAST", 17, 24)
+table4
+```
+
+```{r chlorophyll table}
+chla_tab <- df_chla_a[,c(9,15,18:20)] #subset for species, treatment, parameter, and model values
+chla_tab$binder <- paste(chla_tab$species, chla_tab$treat2, sep = "_")
+T90_chla_mean <- summarySE(data=chla_tab, measurevar = "mean", groupvars = c("species", "treat2", "binder"))
+T90_chla_low <- summarySE(data=chla_tab, measurevar = "lowerci", groupvars = c("species", "treat2", "binder"))
+T90_chla_up <- summarySE(data=chla_tab, measurevar = "upperci", groupvars = c("species", "treat2", "binder"))
+chla_tab <- cbind(T90_chla_mean, T90_chla_low, T90_chla_up)[, c(1,2,4,5,13,21)]
+chla_tab$mean <- round(chla_tab$mean, 2)
+chla_tab$lowerci <- round(chla_tab$lowerci, 2)
+chla_tab$upperci <- round(chla_tab$upperci, 2)
+colnames(chla_tab)[colnames(chla_tab)=="treat2"] <- "treatment"
+colnames(chla_tab)[colnames(chla_tab)=="lowerci"] <- "lower 95%"
+colnames(chla_tab)[colnames(chla_tab)=="upperci"] <- "upper 95%"
+chla_tab$treatment <- factor(chla_tab$treatment, c("T0", "288_28", "311_31", "447_28", "405_31", "673_28", "701_31", "3285_28", "3309_31"))
+table5 <- kable(chla_tab[,-c(1)], booktabs = T, caption = "Table 5. T90 modeled mean algal endosymbiont chlorophyll a content and 95% confichlace intervals for each  species") %>%
+  kable_styling(font_size = 10, full_width = F) %>% 
+  pack_rows("(a) SSID", 1, 8) %>%
+  pack_rows("(b) PSTR", 9, 16) %>%
+  pack_rows("(c) PAST", 17, 24)
+table5
+```
+
+```{r host table}
+host_tab <- df_host_a[,c(9,15,16,18:20)] #subset for species, treatment, parameter, and model values
+host_tab$binder <- paste(host_tab$species, host_tab$param, host_tab$treat2, sep = "_")
+T90_host_mean <- summarySE(data=host_tab, measurevar = "mean", groupvars = c("species", "param", "treat2", "binder"))
+T90_host_low <- summarySE(data=host_tab, measurevar = "lowerci", groupvars = c("species", "param", "treat2", "binder"))
+T90_host_up <- summarySE(data=host_tab, measurevar = "upperci", groupvars = c("species", "param", "treat2", "binder"))
+host_tab <- cbind(T90_host_mean, T90_host_low, T90_host_up)[, c(1,3,5,6,15,24)]
+host_tab$mean <- round(host_tab$mean, 2)
+host_tab$lowerci <- round(host_tab$lowerci, 2)
+host_tab$upperci <- round(host_tab$upperci, 2)
+colnames(host_tab)[colnames(host_tab)=="treat2"] <- "treatment"
+colnames(host_tab)[colnames(host_tab)=="lowerci"] <- "lower 95%"
+colnames(host_tab)[colnames(host_tab)=="upperci"] <- "upper 95%"
+host_tab$treatment <- factor(host_tab$treatment, c("T0", "288_28", "311_31", "447_28", "405_31", "673_28", "701_31", "3285_28", "3309_31"))
+table6 <- kable(host_tab[,-c(1)], booktabs = T, caption = "Table 6. Total coral host physiology at T90 modeled mean and 95% confidence intervals for each physiological parameter per species ") %>%
+  kable_styling(font_size = 10, full_width = F) %>% 
+  pack_rows("(a) SSID", 1, 8) %>%
+  pack_rows("(b) PSTR", 9, 16) %>%
+  pack_rows("(c) PAST", 17, 24)
+table6
+```
+
+
+```{r excel WB, message=FALSE, warning=FALSE}
+### Create workbook
+wb <- createWorkbook()
+# add 'Table 1' worksheet
+addWorksheet(wb, "Table 1 - protein") 
+writeData(wb, sheet = 1, x = pro_tab)
+setColWidths(wb, sheet = 1, cols = 1:5, widths = "auto")
+# add 'Table 2' worksheet
+addWorksheet(wb, "Table 2 - lipid") 
+writeData(wb, sheet = 2, x = lipid_tab)
+setColWidths(wb, sheet = 2, cols = 1:5, widths = "auto")
+# add 'Table 3' worksheet
+addWorksheet(wb, "Table 3 - carbohydrate") 
+writeData(wb, sheet = 3, x = carb_tab)
+setColWidths(wb, sheet = 3, cols = 1:5, widths = "auto")
+# add 'Table 4' worksheet
+addWorksheet(wb, "Table 4 - density") 
+writeData(wb, sheet = 4, x = den_tab)
+setColWidths(wb, sheet = 4, cols = 1:5, widths = "auto")
+# add 'Table 5' worksheet
+addWorksheet(wb, "Table 5 - chlorophyll") 
+writeData(wb, sheet = 5, x = chla_tab)
+setColWidths(wb, sheet = 5, cols = 1:5, widths = "auto")
+# add 'Table 6' worksheet
+addWorksheet(wb, "Table 6 - total host") 
+writeData(wb, sheet = 6, x = host_tab)
+setColWidths(wb, sheet = 6, cols = 1:5, widths = "auto")
+# save workbook
+saveWorkbook(wb, file="Data/Supplemental/Supplemental_Tables.xlsx", overwrite = TRUE)
+```
+
+
+
+<br/>
+
+
+## Session information
+
+Session information from the last run date on `r date`:
+
+```{r}
+sessionInfo()
+```
+
