@@ -1,0 +1,1839 @@
+---
+title: "Acropora_DataCleaning_Ecophys"
+author: "Gould, Katelyn"
+date: "10/2/2019"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: kable 
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+#Description
+In this file I combine all the ecophysiological data (zooxanthella densities, chlorophyll a concentration, surface area, growth rate, and protein content extracted from Acropora cervicornis corals that were flash frozen in liquid nitrogen on April 24th 2017. Corals were then processed in the lab at the University of North Carolina at Chapel Hill in June-August 2019. 
+</br></br>
+## What is in this file?
+Data cleaning for further analyses using `tidyverse` (and a few other) packages
+</br></br>
+
+
+```{r setup, results='hide', message=FALSE}
+knitr::opts_chunk$set(echo = TRUE) # will automatically include code in the ouput unless we state otherwise
+knitr::opts_chunk$set(warning= FALSE) # will NOT include warning messages in the output unless we state otherwise
+# knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE) #keeps code wrapped in the output
+
+# if you haven't installed these packages run the following line (first delete the # sign):
+#install.packages(c("tidyverse", "janitor", "kableExtra", "cowplot", "skimr", "measurements"))
+
+library(tidyverse) #data wrangling & cleaning incl. ggplot
+library(janitor) # more data cleaning functions
+library(kableExtra) # making pretty tables
+library(cowplot) # making publication quality figures or multi-panel figures
+library(skimr) # tool to get quick overview of dataset
+library(measurements) # useful to convert units
+library(readr)
+library(esquisse)
+library(rvg)
+library(car)
+library(ggpubr)
+library(plotrix)
+library(mvnormtest)
+
+```
+</br></br>
+
+# Data
+For this common garden experiment, we will upload ecophys data extrapolated from frozen Acropora cervicornis corals in June-August 2019. 
+This experiment is esimating the differences between three treatments and a control aquarium for the various ecophys factors:
+* Metabolic rates "Fitness" (Gross Photosynthesis, Respiration) umol/cm2/hr _See: Data_Manipultion_final.csv, and TPCs_ALL_acropora_final.csv_
+* Growth rates are in _% larger than the intial value.
+* Protein Concentration ug/cm2 (coral tissue)
+* Zooxanthella densities Zoox/coral, cm2, log(Zoox/cm2), & Zoox/protein
+* Chlorophylla a concentration Chl/zoox (pg), Chl/protein, ug/cm2, log(ug/cm2)
+</br></br>
+Some important notes:  
+* Surface area in cm^2 was estimated via 3D scans
+* Growth rates were estimated via buoyant weights taken before and after the experimental temperature ramping and is in %
+* Protein, chlorophyll a, and zooxanthella density are all standardized to Surface area. 
+* Coral ID's represent the Genotypes: K2, M5 & M6 followed by treatment 01 (Sprinkler), 02 (Lights), 03 (lights & sprinkler), & C (control).
+
+
+</br></br>
+
+__Read in bleaching Data__
+```{r data_import}
+
+setwd("C:/Github/TPC_Acropora/Raw_data")
+getwd()
+
+data<-read.csv("C:/Github/TPC_Acropora/Raw_data/Ecophys_data/TidyEcopphysData.csv")
+
+```
+</br></br>
+
+```{r data_review}
+# review variables and class types
+str(data)
+
+# use the janitor package to clean up column names- lowercase, no spaces
+data <- janitor::clean_names(data)
+
+# We can do some manual investigation of the data:
+  # How many unqiue coral reefs are included in this dataset?
+length(unique(data$genotype)) #4
+length(unique(data$coral_id)) #52
+# What are the different substrate codes?
+unique(data$treatment) # 1,2,3,c,i
+
+T0data<-data%>%
+  filter(treatment=="i")%>%
+  filter(genotype!="M7")
+
+T0data$totzoox<-T0data$zoox_cm2_3d/100000
+
+T0data$logzoo<-log(T0data$zoox_cm2_3d+1)
+T0data$logprotein<-log(T0data$protein_3d_ug_cm2+1)
+T0data$logchl_ug_cm2<-log(T0data$chl_ug_cm2+1)
+
+Dtest<-data%>%
+  filter(treatment!="i")
+Dtest%>% filter(genotype!="M7")
+data<-Dtest
+# Use the kableExtra package to view a pretty table for a subset of the data:
+  # First, let's just subset the first 10 rows
+RawDataTab<-data%>% 
+    # Add a title
+  kableExtra::kable(caption="Raw Ecophys") %>% 
+    # Specify how we will see the table, type ?kablestyling to see explanations and options
+  kable_styling(bootstrap_options = "condensed", full_width=F) 
+
+```
+
+```{r skimr, results='hide'}
+
+# And we can use the skimr package to review the dataset
+skimr::skim(data)
+
+
+data$treatment <- sub("^", "T", data$treatment )
+data$treatment<-factor(data$treatment)
+#write.csv(data,"C:/Github/TPC_Acropora/data.csv")
+```
+
+
+xtabs(~ genotype + treatment, data = data)
+ treatment
+genotype 1 2 3 c i
+      K2 4 4 4 4 2
+      M5 4 4 4 4 1
+      M6 4 4 4 4 1
+      M7 0 0 0 0 1
+
+# PROTEIN/CM2
+Total Protein
+
+```{r}
+plab<-expression(paste("Total protein ( "*mu,"g cm"^-2,")"))
+
+ggplot(data, aes(y=protein_3d_ug_cm2, x=treatment, fill = genotype)) + 
+  geom_boxplot() + 
+  ylab(plab)+
+  theme_classic()
+```
+
+## Look at all dependent variables and check for skewedness
+
+```{r}
+
+##Checking non logged transformed portein data
+ggdensity(data$protein_3d_ug_cm2, 
+          main = "Density plot of protein",
+          xlab = "Protein content")
+#SKEWED
+ggqqplot(data$protein_3d_ug_cm2)
+shapiro.test(data$protein_3d_ug_cm2)
+#2.053e-6
+
+data$logprotein<-log(data$protein_3d_ug_cm2+1)
+
+ggdensity(data$logprotein, 
+          main = "Density plot of protein",
+          xlab = "Protein content")
+#SKEWED
+ggqqplot(data$logprotein)
+shapiro.test(data$logprotein)
+#0.0007 
+# The data did not pass th shapiro test- I will transform the data with logit to see if that can solve the problem of normality
+#logit transform 0-100
+data$logitprotein<-car::logit(data$protein_3d_ug_cm2)
+
+
+ggdensity(data$logitprotein, 
+          main = "Density plot of protein",
+          xlab = "Protein content")
+#SKEWED
+ggqqplot(data$logitprotein)
+shapiro.test(data$logitprotein)
+#0.03211
+
+shapiro.test(data$protein_3d_ug_cm2)
+
+bartlett.test(protein_3d_ug_cm2~interaction(treatment,genotype), data=data)
+bartlett.test(protein_3d_ug_cm2~treatment, data=data)
+bartlett.test(protein_3d_ug_cm2~genotype, data=data)
+#did not pass bartlett
+leveneTest(protein_3d_ug_cm2~treatment, data=data)
+leveneTest(protein_3d_ug_cm2~genotype, data=data)
+leveneTest(protein_3d_ug_cm2 ~ treatment*genotype, data = data)
+fligner.test(protein_3d_ug_cm2~treatment, data=data)
+fligner.test(protein_3d_ug_cm2~genotype, data=data)
+# It still is not normal, nor is the variance equal therefore I will use a non-parametric test on the non-transformed raw data to assess the protein content/cm2 of the corals to find differences 
+
+# Due to the small sample size of n=48, the non-normality of both logged and logit transformed data not passing the shapiro test I will priceed with a nonparametric test (distribution free test) for this dependent variable
+#The modules on hypothesis testing presented techniques for testing the equality of means in two independent samples. An underlying assumption for appropriate use of the tests described was that the continuous outcome was approximately normally distributed or that the samples were sufficiently large (usually n1> 30 and n2> 30) to justify their use based on the Central Limit Theorem
+# Nonparametric test options: 
+# 1) Mann Whitney U Test AKA Wilcoxon Rank Sum test [akin to comparing the medians between the two populations "matched or paired data only"]=For any Mann-Whitney U test, the theoretical range of U is from 0 (complete separation between groups, H0 most likely false and H1 most likely true) to n1*n2 (little evidence in support of H1)
+#2) **Kruskal Wallis test [The Kruskal Wallis test is used to compare medians among k comparison groups (k > 2) and is sometimes described as an ANOVA with the data replaced by their ranks]  in a Kruskal Wallis test with 3 or more comparison groups and 5 or more observations in each group, the critical value for the test can be found in the table of Critical Values of the χ 2 Distribution**
+#
+```
+
+Non parametric Kruskal Wallis protein/cm2
+
+```{r}
+library(rstatix)
+data %>% 
+  group_by(genotype,treatment) %>%
+  get_summary_stats(protein_3d_ug_cm2, type = "common")
+
+#box plot
+ggboxplot(data, x = "treatment", y = "protein_3d_ug_cm2")
+ggboxplot(data, x = "genotype", y = "protein_3d_ug_cm2")
+
+#Question: We want to know if there is a significant difference between the average protein content/cm2 of corals in the 4 experimental conditions and among genotypes.
+
+res.kruskal <- data %>% kruskal_test(protein_3d_ug_cm2 ~ treatment)
+res.kruskal
+# pvalue= 0.0743
+res.kruskal2 <- data %>% kruskal_test(protein_3d_ug_cm2 ~ genotype)
+res.kruskal2
+#0.488
+
+#EFFECT SIZE
+#The eta squared, based on the H-statistic, can be used as the measure of the Kruskal-Wallis test effect size. It is calculated as follow : eta2[H] = (H - k + 1)/(n - k); where H is the value obtained in the Kruskal-Wallis test; k is the number of groups; n is the total number of observations (M. T. Tomczak and Tomczak 2014).
+
+#The eta-squared estimate assumes values from 0 to 1 #and multiplied by 100 indicates the percentage of #variance in the dependent variable explained by the #independent variable.
+#
+#The interpretation values commonly in published #literature are: 0.01- < 0.06 (small effect), 0.06 - #0.14 (moderate effect) and >= 0.14 (large effect).
+data %>% kruskal_effsize(protein_3d_ug_cm2 ~ treatment)
+# 0.0892-- moderate
+data %>% kruskal_effsize(protein_3d_ug_cm2 ~ genotype)
+# -0.0125- small
+# Pairwise comparisons
+pwc <- data %>% 
+  dunn_test(protein_3d_ug_cm2 ~ treatment, p.adjust.method = "BH") 
+pwc
+#NA no differences between treatments Treat 1 and C 0.0592*
+pwcg <- data %>% 
+  dunn_test(protein_3d_ug_cm2 ~ genotype, p.adjust.method = "BH") 
+pwcg
+#NA no differences between genotypes
+pwc <- pwc %>% add_xy_position(x = "treatment")
+pwcg <- pwcg %>% add_xy_position(x = "genotype")
+
+mod<-lm(protein_3d_ug_cm2~treatment*genotype,data)
+
+effects::allEffects(mod)
+summary(mod)
+#F 1.019 df 36 p-value- 0.4499
+data$cat <- paste(data$treatment,data$genotype)
+data$cat<-factor(data$cat)
+res.kruskalD <- data %>% kruskal_test(protein_3d_ug_cm2 ~ cat)
+res.kruskalD
+# stat 13.9 df 11 p-value 0.241
+#EFFECT SIZE
+data %>% kruskal_effsize(protein_3d_ug_cm2 ~ cat)
+#0.0794 -moderate
+library(dunn.test)
+dunn.test(data$protein_3d_ug_cm2, data$cat, method="bh")
+#chi-squared = 13.857, df = 11, p-value = 0.24
+pwcD <- data %>% 
+  dunn_test(protein_3d_ug_cm2 ~ cat, p.adjust.method = "bonferroni") 
+pwcD
+pwcD <- pwcD %>% add_xy_position(x = "cat")
+
+
+#setwd("C:/Github/TPC_Acropora/graphs")
+
+ProplotT<-ggboxplot(data, x = "treatment", y = "protein_3d_ug_cm2", color= "black", fill="treatment", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(plab)+
+  xlab('Treatment')+
+   theme(legend.position = "none")+
+ scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))+
+   stat_pvalue_manual(pwc, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal, detailed = TRUE),
+    caption = get_pwc_label(pwc)
+    )
+
+ProplotT
+ggexport(ProplotT, filename = "ProplotT.pdf")
+
+
+ProplotG<-ggboxplot(data, x = "genotype", y = "protein_3d_ug_cm2", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(plab)+
+  xlab('Genotype')+
+  theme(legend.position = "none")+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcg, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal2, detailed = TRUE),
+    caption = get_pwc_label(pwcg)
+    )
+
+ProplotG
+ggexport(ProplotG, filename = "ProplotG.pdf")
+
+
+ProplotI<-ggboxplot(data, x = "cat", y = "protein_3d_ug_cm2", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(plab)+
+  xlab('')+
+  theme(legend.position = "bottom")+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcD, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskalD, detailed = TRUE),
+    caption = get_pwc_label(pwcD)
+    )
+ProplotI
+
+ggexport(ProplotI, filename = "ProplotI.pdf")
+```
+
+```{r}
+data_np<-data[c(1:3,5,15, 19:21)]
+data.table::setnames(idf_np, old = c('protein_3d_ug_cm2','chl_ug_cm2', 'percent_growth', 'totzoox'), new = c('Pro','Chlo','Growth','Zoox'))
+idf_np
+```
+
+With inital
+```{r}
+# get all data from intial
+## With inital
+
+idf<-read.csv("C:/Github/TPC_Acropora/Raw_data/Ecophys_data/TidyEcopphysData.csv")
+idf <- janitor::clean_names(idf)
+# read in full dataframe
+# remove unnecessary column
+#idf$X1 <- NULL
+idf<-idf%>%
+  filter(genotype!="M7")
+# set columns as factors
+idf$cat <- paste(idf$treatment,idf$genotype)
+
+idf$cat <- as.factor(idf$cat)
+idf$genotype <- as.factor(idf$genotype)
+idf$coral_id <- as.factor(idf$coral_id)
+idf$treatment <- sub("^", "T", idf$treatment )
+idf$treatment <- as.factor(idf$treatment)
+idf$totzoox<-idf$zoox_cm2_3d/100000
+idf$logzoo<-log(idf$totzoox+1)
+idf$logpercent_growth<-log(idf$percent_growth+1)
+
+idf_sp<-idf[,c(1:3,5,15,20, 22:23)]
+idf_np<-idf[,c(1:3,5,15, 19:21)]
+data.table::setnames(idf_sp, old = c('protein_3d_ug_cm2','chl_ug_cm2', 'logpercent_growth', 'logzoo'), new = c('Pro','Chlo','Log_Growth','Log_Zoox'))
+idf_sp
+data.table::setnames(idf_np, old = c('protein_3d_ug_cm2','chl_ug_cm2', 'percent_growth', 'totzoox'), new = c('Pro','Chlo','Growth','Zoox'))
+idf_np
+```
+
+
+```{r}
+
+## #kruskal 
+res.kruskali <- idf_sp %>% kruskal_test(Pro ~ treatment)
+res.kruskali
+res.kruskal2i <- idf_sp %>% kruskal_test(Pro ~ genotype)
+res.kruskal2i
+res.kruskalDi <- idf_sp %>% kruskal_test(Pro ~ cat)
+res.kruskalDi
+# Pairwise comparisons
+pwci <- idf_sp %>% 
+  dunn_test(Pro ~ treatment, p.adjust.method = "BH") 
+pwci
+
+pwcgi <- idf_sp %>% 
+  dunn_test(Pro ~ genotype, p.adjust.method = "BH") 
+pwcgi
+
+pwcDi <- idf_sp %>% 
+  dunn_test(Pro ~ cat, p.adjust.method = "bonferroni") 
+pwcDi
+
+#NA no differences between genotypes
+pwci <- pwci %>% add_xy_position(x = "treatment")
+pwcgi <- pwcgi %>% add_xy_position(x = "genotype")
+pwcDi <- pwcDi %>% add_xy_position(x = "cat")
+
+
+
+ProplotTi<-ggboxplot(idf_sp, x = "treatment", y = "Pro", color= "black", fill="treatment", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(plab)+
+  xlab('Treatment')+
+   theme(legend.position = "none")+
+ scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33','white'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  scale_x_discrete(breaks=c("Ti","T1", "T2", "T3", "Tc"),
+        labels=c("Inital","Sprinkler", "Feeding", "Interactive","Control"))+
+   stat_pvalue_manual(pwci, hide.ns = TRUE) +
+    labs(
+    subtitle = get_test_label(res.kruskali, detailed = TRUE),
+    caption = get_pwc_label(pwci)
+    )
+
+ProplotTi
+ggexport(ProplotTi, filename = "ProplotTi.pdf")
+
+
+ProplotGi<-ggboxplot(idf_sp, x = "genotype", y = "Pro", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(plab)+
+  xlab('Genotype')+
+  theme(legend.position = "none")+
+  scale_fill_manual(values = c('red','green4', 'blue', 'white'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcgi, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal2i, detailed = TRUE),
+    caption = get_pwc_label(pwcgi)
+    )
+
+ProplotGi
+ggexport(ProplotGi, filename = "ProplotGi.pdf")
+
+
+ProplotIi<-ggboxplot(idf_sp, x = "cat", y = "Pro", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(plab)+
+  xlab('')+
+  theme(legend.position = "bottom")+
+  scale_fill_manual(values = c('red','green4', 'blue','white'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcDi, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskalDi, detailed = TRUE),
+    caption = get_pwc_label(pwcDi)
+    )
+ProplotIi
+
+ggexport(ProplotIi, filename = "ProplotIi.pdf")
+
+```
+
+ Density Zoox/cm2
+
+```{r}
+
+data$totzoox<-data$zoox_cm2_3d/100000
+
+# 10^4 
+dlab<-expression(paste("Cell density (10"^5,"cells cm"^-2,")"))
+
+
+
+ggplot(data, aes(y=totzoox, x=treatment, fill = genotype)) +   geom_boxplot() + 
+  ylab(dlab)+
+  theme_classic()
+```
+
+```{r}
+
+##Checking non logged transformed zoox_cm2_3d data
+ggdensity(data$totzoox, 
+          main = "Density plot of Zoox/cm2",
+          xlab = "Zoox/cm2 coral Tissue")
+#SKEWED
+ggqqplot(data$totzoox)
+shapiro.test(data$totzoox)
+#1.04e-06 
+
+#logdata
+data$logzoo<-log(data$totzoox+1)
+# IS THIS LOGGED CORRECTLY?
+# 
+
+ggdensity(data$logzoo, 
+          main = "Density plot of Zoox",
+          xlab = "Zoox Density")
+#SKEWED
+ggqqplot(data$logzoo)
+shapiro.test(data$logzoo)
+#0.1325
+bartlett.test(logzoo~interaction(treatment,genotype), data=data)
+bartlett.test(logzoo~treatment, data=data)
+bartlett.test(logzoo~genotype, data=data)
+leveneTest(logzoo~treatment, data=data)
+leveneTest(logzoo~genotype, data=data)
+leveneTest(logzoo ~ treatment*genotype, data = data)
+fligner.test(logzoo~treatment, data=data)
+fligner.test(logzoo~genotype, data=data)
+# #equal variance and normal data whhen logged- 
+
+```
+
+Parametric test ANOVA lm
+```{r}
+
+zoosum<-data %>% 
+  group_by(genotype,treatment) %>%
+  get_summary_stats(logzoo, type = "common")
+
+zoosumT<-kable(zoosum, digits = 4,
+      caption = "Summary statistics for Log Zoox densities",
+      col.names = c("Treatment", "Genotype", "Parameter", "n", "Min", "Max", "Median", "IQR", "Mean","SD", "SE", "CI"),
+      align = 'c') %>%
+  kable_styling(bootstrap_options =
+                  c("hover", "responsive", "striped"),
+                full_width = F, position = "center")
+
+zoosumT
+
+# Proceed with ANOVA/lm post hoc Tukeys HSD for logged zooxanthellae
+zoomoda<-aov(logzoo~genotype*treatment,data)
+summary(zoomoda)
+#treatment diff 0.00295
+pairwise.t.test(data$logzoo, data$treatment,
+                p.adjust.method = "BH")
+#1 & 2 0.008 
+#2 & C 0.008
+
+
+pairwise.t.test(data$logzoo, data$genotype,
+                p.adjust.method = "BH")
+#NS
+
+pairwise.t.test(data$logzoo,data$cat,
+                p.adjust.method = "bonf")
+#T1M6:T3M5- 0.044
+##T1M6:T2K2- 0.025
+#more
+TukeyHSD(zoomoda)
+#M5:T3-M6:T1 -0.07981858 0.0281097
+#M6:T2-M6:T1 -0.05909356 0.0327375
+#M5:T2-M6:T1 -0.02224300 0.0427180
+#K2:T2-M6:T1 -0.14628549 0.0170329
+library(Rmisc)
+LzootSSt = summarySE(data, measurevar="logzoo",
+                     groupvars=c("treatment"))
+
+LzootSSt
+LzoogSSt = summarySE(data, measurevar="logzoo",
+                     groupvars=c("genotype"))
+
+LzoogSSt
+LzooiSSt = summarySE(data, measurevar="logzoo",
+                     groupvars=c("cat"))
+
+LzooiSSt
+ 
+Lzootbar<-ggplot(LzootSSt, aes(x=factor(treatment), y=logzoo, fill=treatment)) + 
+    geom_bar(stat="identity", width=0.8) +
+    geom_errorbar(aes(ymin=logzoo-se, ymax=logzoo+se),
+                  width=.2) +
+    xlab("") +
+ylab(dlab)+
+   theme_classic()+
+    scale_x_discrete(breaks=c("T1", "T2", "T3", "TC"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))
+ Lzootbar
+  
+LzooImod<-lm(logzoo~genotype*treatment,data)
+summary(LzooImod)
+# F-  2.877, DF- 36 p-value  0.008168**
+Lzootmod<-aov(logzoo~treatment,data)
+summary(Lzootmod)
+# treat df 3 F=4.844 P= 0.00534
+TukeyHSD(Lzootmod)
+#T2-T1 0.0119483
+#Tc-T2 0.0136503
+Lzoogmod<-aov(logzoo~genotype,data)
+summary(Lzoogmod)
+TukeyHSD(Lzoogmod)
+# NSD
+
+LzooImodP<-ggplot(LzooImod, aes(x=treatment, logzoo, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('')+
+  ylab(dlab)+
+  theme(legend.position = "bottom")+
+  stat_compare_means(label.y=3.5, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+LzooImodP
+
+ggexport(LzooImodP, filename = "LzooANOplotinter.pdf")
+#######
+
+LzoogmodP<-ggplot(Lzoogmod, aes(x=genotype, logzoo, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Genotype')+
+  ylab(dlab)+
+  theme(legend.position = "none")+
+    stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=3.5, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))
+LzoogmodP
+
+ggexport(LzoogmodP, filename = "LzooANOplotgeno.pdf")
+
+LzootmodP<-ggplot(Lzootmod, aes(x=treatment, logzoo, fill= treatment))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Treatment')+
+  ylab(dlab)+
+  theme(legend.position = "none")+
+      stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=3.5, method = "anova")+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+
+LzootmodP
+ggexport(LzootmodP, filename = "LzooANOplotrea.pdf")
+
+stat.testi<-aov(logzoo~treatment,data)%>%
+  tukey_hsd()
+
+LzoogmodPTu<-ggboxplot(data, x = "treatment", y = "logzoo", fill= "treatment")+
+    ylab(dlab)+
+  stat_pvalue_manual(
+    stat.testi, label = "p.adj", 
+    y.position = c(4,5,6,6.5,7,7.5))
+
+plot<-LzoogmodPTu+
+    scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+    theme(legend.position = "none")+
+    xlab('Treatment')+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+plot
+ggexport(plot, filename = "LzooANOplottreaTUK.pdf")
+```
+
+intial 
+```{r}
+LzooImodi<-lm(Log_Zoox~genotype*treatment,idf_sp)
+summary(LzooImodi)
+# F-  2.283 on 14 and 36 DF,  p-value: 0.02323***
+Lzootmodi<-aov(Log_Zoox~treatment,idf_sp)
+summary(Lzootmodi)
+# treat df 3 F=3.777 P=  0.00974
+TukeyHSD(Lzootmodi)
+#T2-T1 -0.69025843 -1.28452788 -0.09598898 0.0154251**
+#T3-T1 -0.38866994 -0.98293939  0.20559951 0.3547495
+#Tc-T1 -0.01057887 -0.60484832  0.58369058 0.9999985
+#Ti-T1 -0.24962001 -1.18924251  0.69000250 0.9422057
+#T3-T2  0.30158849 -0.29268096  0.89585794 0.6051601
+#Tc-T2  0.67967956  0.08541011  1.27394901 0.0176736**
+#Ti-T2  0.44063843 -0.49898408  1.38026093 0.6734227
+#Tc-T3  0.37809107 -0.21617838  0.97236052 0.3825169
+#Ti-T3  0.13904993 -0.80057257  1.07867244 0.9932607
+#Ti-Tc -0.23904113 -1.17866364  0.70058137 0.9502853
+
+Lzoogmodi<-aov(Log_Zoox~genotype,idf_sp)
+summary(Lzoogmodi)
+TukeyHSD(Lzoogmodi)
+# NSD
+
+LzooImodPi<-ggplot(LzooImodi, aes(x=treatment, Log_Zoox, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('')+
+  ylab(dlab)+
+  theme(legend.position = "bottom")+
+  stat_compare_means(label.y=3.5, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue', "white"))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc", "Ti"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control", "Inital"))
+LzooImodPi
+
+ggexport(LzooImodPi, filename = "LzooANOplotinteri.pdf")
+#######
+
+LzoogmodPi<-ggplot(Lzoogmodi, aes(x=genotype, Log_Zoox, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Genotype')+
+  ylab(dlab)+
+  theme(legend.position = "none")+
+    stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=3.5, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))
+LzoogmodPi
+
+ggexport(LzoogmodPi, filename = "LzooANOplotgenoi.pdf")
+
+LzootmodPi<-ggplot(Lzootmodi, aes(x=treatment, Log_Zoox, fill= treatment))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Treatment')+
+  ylab(dlab)+
+  theme(legend.position = "none")+
+      stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=3.5, method = "anova")+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33', 'white'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc", "Ti"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control",'Inital'))
+
+LzootmodPi
+ggexport(LzootmodPi, filename = "LzooANOplotreai.pdf")
+
+stat.testii<-aov(Log_Zoox~treatment,idf_sp)%>%
+  tukey_hsd()
+
+LzoogmodPTui<-ggboxplot(idf_sp, x = "treatment", y = "Log_Zoox", fill= "treatment")+
+    ylab(dlab)+
+  stat_pvalue_manual(
+    stat.testii, label = "p.adj", 
+    y.position = c(4,5,6,6.5,7,7.5,8,8.5,9,9.5))
+
+ploti<-LzoogmodPTui+
+    scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33','white'))+
+    theme(legend.position = "none")+
+    xlab('Treatment')+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc","Ti"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control", "Inital"))
+ploti
+ggexport(ploti, filename = "LzooANOplottreaTUKi.pdf")
+```
+
+
+Growth Rate
+
+```{r}
+glab<-expression(paste("Growth Rate (%)"))
+
+ggplot(data, aes(y=percent_growth, x=treatment, fill = genotype)) + 
+  geom_boxplot() +
+  ylab(glab)+
+  theme_classic()
+```
+ Growth rate*100
+```{r}
+
+#Checking non logged transformed chl_ug_cm2 data
+ggdensity(data$percent_growth, 
+          main = "Density plot of percent_growth",
+          xlab = "percent_growth of coral")
+#Normal
+ggqqplot(data$percent_growth)
+shapiro.test(data$percent_growth)
+#0.01553 
+
+#logdata
+data$logpercent_growth<-log(data$percent_growth+1)
+
+ggdensity(data$logpercent_growth, 
+          main = "Density plot of Growth Rate",
+          xlab = "Growth Rate")
+#SKEWED
+ggqqplot(data$logpercent_growth)
+shapiro.test(data$logpercent_growth)
+#0.2879
+bartlett.test(logpercent_growth~interaction(treatment,genotype), data=data)
+bartlett.test(logpercent_growth~treatment, data=data)
+bartlett.test(logpercent_growth~genotype, data=data)
+leveneTest(logpercent_growth~treatment, data=data)
+leveneTest(logpercent_growth~genotype, data=data)
+leveneTest(logpercent_growth ~ treatment*genotype, data = data)
+fligner.test(logpercent_growth~treatment, data=data)
+fligner.test(logpercent_growth~genotype, data=data)
+#equal variance ANOVA/lm
+```
+
+Parametric ANOVA/ lm
+```{r}
+GRsum<-data %>% 
+  group_by(genotype,treatment) %>%
+  get_summary_stats(logpercent_growth, type = "common")
+
+GRsumT<-kable(GRsum, digits = 4,
+      caption = "Summary statistics for Log Zoox/protein densities",
+      col.names = c("Treatment", "Genotype", "Parameter", "n", "Min", "Max", "Median", "IQR", "Mean","SD", "SE", "CI"),
+      align = 'c') %>%
+  kable_styling(bootstrap_options =
+                  c("hover", "responsive", "striped"),
+                full_width = F, position = "center")
+
+GRsumT
+
+# Proceed with ANOVA/lm post hoc Tukeys HSD for logged zooxanthellae
+Lgrmoda<-aov(logpercent_growth~genotype*treatment,data)
+summary(Lgrmoda)
+
+#genotype diff 0.000111
+pairwise.t.test(data$logpercent_growth, data$treatment,
+                p.adjust.method = "bonf")
+#NA
+
+
+pairwise.t.test(data$logpercent_growth, data$genotype,
+                p.adjust.method = "bonf")
+#K2:M5- 8.2e-5
+#M5:M6-. 00092
+
+pairwise.t.test(data$logpercent_growth,data$cat,
+                p.adjust.method = "bonf")
+
+#T1K2:T2M5- 0.019
+#T3K2:T2M5- 0.0260
+#TCK2: T2M5 0.0040
+
+TukeyHSD(Lgrmoda)
+#K2:Tc-M5:T2  0.808892555  0.1868168664  1.430968243 0.0030695
+#M6:T3-M5:T2  0.642890311  0.0208146232  1.264965999 0.0375670
+#K2:T3-M5:T2  0.696491696  0.0744160080  1.318567384 0.0173949
+#M5:T2-K2:T2 -0.631559666 -1.2536353543 -0.009483978 0.0439367
+#M5:T2-M6:T1 -0.624415283 -1.2464909710 -0.002339595 0.0484383
+#M5:T2-K2:T1 -0.853122812 -1.4751984998 -0.231047124 0.0015028
+LgrtSSt = summarySE(data, measurevar="logpercent_growth",
+                     groupvars=c("treatment"))
+
+LgrtSSt
+LgrgSSt = summarySE(data, measurevar="logpercent_growth",
+                     groupvars=c("genotype"))
+
+LgrgSSt
+LgriSSt = summarySE(data, measurevar="logpercent_growth",
+                     groupvars=c("cat"))
+
+LgriSSt
+ 
+Lgrtbar<-ggplot(LgrtSSt, aes(x=factor(treatment), y=logpercent_growth, fill=treatment)) + 
+    geom_bar(stat="identity", width=0.8) +
+    geom_errorbar(aes(ymin=logpercent_growth-se, ymax=logpercent_growth+se),
+                  width=.2) +
+    xlab("Treatment") +
+  ylab(expression(paste("log", O[2], mu,"mol cm"^{-2}, "hr"^{-1})))+
+  ggtitle('Log Growth Rate')+
+   theme_classic()+
+    scale_x_discrete(breaks=c("T1", "T2", "T3", "TC"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))
+ Lgrtbar
+  
+LgrImod<-lm(logpercent_growth~genotype*treatment,data)
+summary(LgrImod)
+# F- 3.162, DF- 36 p-value 0.004392*
+Lgrtmod<-aov(logpercent_growth~treatment,data)
+summary(Lgrtmod)
+TukeyHSD(Lgrtmod)
+#NA
+Lgrgmod<-aov(logpercent_growth~genotype,data)
+summary(Lgrgmod)
+#df 2 F 11.32  p= 0.000104
+TukeyHSD(Lgrgmod)
+#M5-K2 -0.4255853  0.0000804
+#M6-M5  0.2854627  0.0084194
+
+LgrImodP<-ggplot(LgrImod, aes(x=treatment, logpercent_growth, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('')+
+  ylab(glab)+
+  stat_compare_means(label.y=3, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+LgrImodP
+
+ggexport(LgrImodP, filename = "LgrANOplotinter.pdf")
+
+
+LgrgmodP<-ggplot(Lgrgmod, aes(x=genotype, logpercent_growth, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Genotype')+
+  ylab(glab)+
+  theme(legend.position = "none")+
+    stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=3, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))
+LgrgmodP
+
+ggexport(LgrgmodP, filename = "LgrANOplotgeno.pdf")
+
+LgrtmodP<-ggplot(Lgrtmod, aes(x=treatment, logpercent_growth, fill= treatment))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Treatment')+
+ylab(glab)+
+  theme(legend.position = "none")+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=3, method = "anova")+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+
+LgrtmodP
+ggexport(LgrtmodP, filename = "LgrANOplotrea.pdf")
+
+stat.testi<-aov(logpercent_growth~genotype,data)%>%
+  tukey_hsd()
+
+LgrgmodPTug<-ggboxplot(data, x = "genotype", y = "logpercent_growth", fill= "genotype")+
+  ylab(glab)+
+  xlab("Genotype")+
+    theme(legend.position = "none")+
+  stat_pvalue_manual(
+    stat.testi, label = "p.adj", 
+    y.position = c(3,3.5,4))
+
+plotgr<-LgrgmodPTug+
+    scale_fill_manual(values = c('red','green4', 'blue'))
+plotgr
+
+ggexport(plotgr, filename = "LgrANOplotgenoTUK.pdf")
+```
+
+Inital
+
+```{r}
+LgrImodi<-lm(Log_Growth~genotype*treatment,idf_sp)
+summary(LgrImodi)
+# genotypeM5       0.0238 *  
+# treatmentTi     7.5e-08 ***
+# F-statistic: 10.63 on 14 and 36 DF,  p-value: 6.476e-09
+Lgrtmodi<-aov(Log_Growth~treatment,idf_sp)
+summary(Lgrtmodi)
+TukeyHSD(Lgrtmodi)
+#NA
+Lgrgmodi<-aov(Log_Growth~genotype,idf_sp)
+summary(Lgrgmodi)
+#df 2 F 11.32  p= 0.0.0457
+TukeyHSD(Lgrgmodi)
+#M5-K2 -0.4255853  0.0000804
+#M6-M5  0.2854627  0.0084194
+
+LgrImodPi<-ggplot(LgrImodi, aes(x=treatment, Log_Growth, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('')+
+  ylab(glab)+
+  stat_compare_means(label.y=3, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+LgrImodPi
+
+ggexport(LgrImodPi, filename = "LgrANOplotinteri.pdf")
+
+
+LgrgmodPi<-ggplot(Lgrgmodi, aes(x=genotype, Log_Growth, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Genotype')+
+  ylab(glab)+
+  theme(legend.position = "none")+
+    stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=3, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))
+LgrgmodPi
+
+ggexport(LgrgmodPi, filename = "LgrANOplotgeno.pdf")
+i
+LgrtmodPi<-ggplot(Lgrtmodi, aes(x=treatment, Log_Growth, fill= treatment))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Treatment')+
+ylab(glab)+
+  theme(legend.position = "none")+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=3, method = "anova")+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33', 'white'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc","Ti"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control", "Inital"))
+
+LgrtmodPi
+ggexport(LgrtmodPi, filename = "LgrANOplotreai.pdf")
+
+stat.testi<-aov(Log_Growth~genotype,idf_sp)%>%
+  tukey_hsd()
+
+LgrgmodPTugi<-ggboxplot(idf_sp, x = "genotype", y = "Log_Growth", fill= "genotype")+
+  ylab(glab)+
+  xlab("Genotype")+
+    theme(legend.position = "none")+
+  stat_pvalue_manual(
+    stat.testi, label = "p.adj", 
+    y.position = c(3,3.5,4))
+
+plotgri<-LgrgmodPTugi+
+    scale_fill_manual(values = c('red','green4', 'blue', 'white'))
+plotgri
+
+ggexport(plotgri, filename = "LgrANOplotgenoTUKi.pdf")
+```
+
+Chl/cm2
+```{r}
+
+clab<-expression(paste("Chlorophyll a ( "*mu,"g cm"^-2,")"))
+
+ggplot(data, aes(y=chl_ug_cm2, x=treatment, fill = genotype)) + 
+  geom_boxplot() + 
+  ylab(clab)+
+  theme_classic()
+```
+
+```{r}
+
+#Checking non logged transformed chl_ug_cm2 data
+ggdensity(data$chl_ug_cm2, 
+          main = "Density plot of chl_ug_cm2",
+          xlab = "chl_ug_cm2 (pg) of coral")
+#SKEWED
+ggqqplot(data$chl_ug_cm2)
+shapiro.test(data$chl_ug_cm2)
+#7.556e-6 
+
+#logdata
+data$logchl_ug_cm2<-log(data$chl_ug_cm2+1)
+
+ggdensity(data$logchl_ug_cm2, 
+          main = "Density plot of protein",
+          xlab = "Protein content")
+#SKEWED
+ggqqplot(data$logchl_ug_cm2)
+shapiro.test(data$logchl_ug_cm2)
+#0.04299
+
+#logit transform 0-100
+data$logitchl_ug_cm2<-car::logit(data$chl_ug_cm2)
+
+
+ggdensity(data$logitchl_ug_cm2, 
+          main = "Density plot of Chlo",
+          xlab = "Chlor content")
+#SKEWED
+ggqqplot(data$logitchl_ug_cm2)
+shapiro.test(data$logitchl_ug_cm2)
+#0.4512
+bartlett.test(logitchl_ug_cm2~interaction(treatment,genotype), data=data)
+leveneTest(logitchl_ug_cm2~treatment, data=data)
+leveneTest(logitchl_ug_cm2~genotype, data=data)
+leveneTest(logitchl_ug_cm2 ~ treatment*genotype, data = data)
+#0.01661-- only test that doesn't pass homogeneity of variance... Do  non-parametertic tests to compare
+fligner.test(logitchl_ug_cm2~treatment, data=data)
+fligner.test(logitchl_ug_cm2~genotype, data=data)
+#equal variance ANOVA/lm
+#did not pass Levenes Test - Nonparameteric testing
+```
+
+Non-parametric tests on chl_ug_cm2 raw data
+```{r}
+data %>% 
+  group_by(genotype,treatment) %>%
+  get_summary_stats(chl_ug_cm2, type = "common")
+
+#box plot
+ggboxplot(data, x = "treatment", y = "chl_ug_cm2")
+ggboxplot(data, x = "genotype", y = "chl_ug_cm2")
+
+res.kruskal <- data %>% kruskal_test(chl_ug_cm2 ~ treatment)
+res.kruskal
+
+res.kruskal2 <- data %>% kruskal_test(chl_ug_cm2 ~ genotype)
+res.kruskal2
+#0.0409
+
+#EFFECT SIZE
+data %>% kruskal_effsize(chl_ug_cm2 ~ treatment)
+# -0.0627-- moderate
+data %>% kruskal_effsize(chl_ug_cm2 ~ genotype)
+# 0.0977- moderate
+# Pairwise comparisons
+pwc <- data %>% 
+  dunn_test(chl_ug_cm2 ~ treatment, p.adjust.method = "BH") 
+pwc
+#NA no differences
+pwcg <- data %>% 
+  dunn_test(chl_ug_cm2 ~ genotype, p.adjust.method = "BH") 
+pwcg
+#K2:M6- 0.0395
+pwc <- pwc %>% add_xy_position(x = "treatment")
+pwcg <- pwcg %>% add_xy_position(x = "genotype")
+
+mod<-lm(chl_ug_cm2~treatment*genotype,data)
+
+effects::allEffects(mod)
+summary(mod)
+#F 1.162 df 36 p-value- 0.3463
+res.kruskalD <- data %>% kruskal_test(chl_ug_cm2 ~ cat)
+res.kruskalD
+# stat 12.1 df 11 p-value 0.356
+#EFFECT SIZE
+data %>% kruskal_effsize(chl_ug_cm2 ~ cat)
+# 0.0308 - small
+dunn.test(data$chl_ug_cm2, data$cat, method="BH")
+#chi-squared = 12.1071, df = 11, p-value = 0.36
+pwcD <- data %>% 
+  dunn_test(chl_ug_cm2 ~ cat, p.adjust.method = "BH") 
+pwcD
+pwcD <- pwcD %>% add_xy_position(x = "cat")
+
+
+ChlorplotT<-ggboxplot(data, x = "treatment", y = "chl_ug_cm2", color= "black", fill="treatment", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(clab)+
+  xlab('Treatment')+
+  theme(legend.position = "none")+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))+
+   stat_pvalue_manual(pwc, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal, detailed = TRUE),
+    caption = get_pwc_label(pwc)
+    )
+
+ChlorplotT
+ggexport(ChlorplotT, filename = "ChlorplotT.pdf")
+
+
+ChlorplotG<-ggboxplot(data, x = "genotype", y = "chl_ug_cm2", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(clab)+
+  xlab('Genotype')+
+ theme(legend.position = "none")+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcg, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal2, detailed = TRUE),
+    caption = get_pwc_label(pwcg)
+    )
+
+ChlorplotG
+ggexport(ChlorplotG, filename = "ChlorplotG.pdf")
+
+
+ChlorplotI<-ggboxplot(data, x = "cat", y = "chl_ug_cm2", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(clab)+
+  xlab('')+
+ theme(legend.position = "none")+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcD, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskalD, detailed = TRUE),
+    caption = get_pwc_label(pwcD)
+    )
+ChlorplotI
+
+ggexport(ChlorplotI, filename = "ChlorplotI.pdf")
+
+
+ggboxplot(data, x = "treatment", y = "chl_ug_cm2", color= "black", fill="genotype", outlier.shape = 1) +
+  ylab(clab)+
+  xlab('Treatment')+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  stat_summary(fun=mean, geom="point", size=2)+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+
+ggboxplot(data, x = "genotype", y = "chl_ug_cm2", color= "black", fill="treatment", outlier.shape = 1) +
+  ylab(clab)+
+  xlab('Genotype')+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))
+```
+
+
+
+```{r}
+
+## #kruskal 
+res.kruskali <- idf_sp %>% kruskal_test(Chlo ~ treatment)
+res.kruskali
+res.kruskal2i <- idf_sp %>% kruskal_test(Chlo ~ genotype)
+res.kruskal2i
+res.kruskalDi <- idf_sp %>% kruskal_test(Chlo ~ cat)
+res.kruskalDi
+# Pairwise comparisons
+pwci <- idf_sp %>% 
+  dunn_test(Chlo ~ treatment, p.adjust.method = "BH") 
+pwci
+
+pwcgi <- idf_sp %>% 
+  dunn_test(Chlo ~ genotype, p.adjust.method = "BH") 
+pwcgi
+
+pwcDi <- idf_sp %>% 
+  dunn_test(Chlo ~ cat, p.adjust.method = "bonferroni") 
+pwcDi
+
+#NA no differences between genotypes
+pwci <- pwci %>% add_xy_position(x = "treatment")
+pwcgi <- pwcgi %>% add_xy_position(x = "genotype")
+pwcDi <- pwcDi %>% add_xy_position(x = "cat")
+
+ChlorplotTi<-ggboxplot(idf_sp, x = "treatment", y = "Chlo", color= "black", fill="treatment", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(clab)+
+  xlab('Treatment')+
+  theme(legend.position = "none")+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33', "white"))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc", "Ti"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control", "Inital"))+
+   stat_pvalue_manual(pwci, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskali, detailed = TRUE),
+    caption = get_pwc_label(pwci)
+    )
+
+ChlorplotTi
+ggexport(ChlorplotTi, filename = "ChlorplotTi.pdf")
+
+
+ChlorplotGi<-ggboxplot(idf_sp, x = "genotype", y = "Chlo", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(clab)+
+  xlab('Genotype')+
+ theme(legend.position = "none")+
+  scale_fill_manual(values = c('red','green4', 'blue', 'white'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcgi, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal2i, detailed = TRUE),
+    caption = get_pwc_label(pwcgi)
+    )
+
+ChlorplotGi
+ggexport(ChlorplotGi, filename = "ChlorplotGi.pdf")
+
+
+ChlorplotIi<-ggboxplot(idf_sp, x = "cat", y = "Chlo", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab(clab)+
+  xlab('')+
+ theme(legend.position = "none")+
+  scale_fill_manual(values = c('red','green4', 'blue', 'white'))+
+  stat_summary(fun=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcDi, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskalDi, detailed = TRUE),
+    caption = get_pwc_label(pwcDi)
+    )
+ChlorplotIi
+
+ggexport(ChlorplotIi, filename = "ChlorplotIi.pdf")
+```
+
+
+Zoox:Protein
+
+```{r}
+ggplot(data, aes(y=zoox_protein, x=treatment, fill = genotype)) + 
+  geom_boxplot() + 
+  theme_classic()
+```
+
+```{r}
+
+#Checking non logged transformed zoox_protein data
+ggdensity(data$zoox_protein, 
+          main = "Density plot of Zoox/protein",
+          xlab = "Zoox/protein of coral")
+#SKEWED
+ggqqplot(data$zoox_protein)
+shapiro.test(data$zoox_protein)
+#2.95e-5 
+#logdata
+data$logzoopro<-log(data$zoox_protein+1)
+
+ggdensity(data$logzoopro, 
+          main = "Density plot of Zoox/protein",
+          xlab = "Zoox/protein")
+#SKEWED
+ggqqplot(data$logzoopro)
+shapiro.test(data$logzoopro)
+#0.4302
+bartlett.test(logzoopro~interaction(treatment,genotype), data=data)
+bartlett.test(logzoopro~treatment, data=data)
+bartlett.test(logzoopro~genotype, data=data)
+leveneTest(logzoopro~treatment, data=data)
+leveneTest(logzoopro~genotype, data=data)
+leveneTest(logzoopro ~ treatment*genotype, data = data)
+fligner.test(logzoopro~treatment, data=data)
+fligner.test(logzoopro~genotype, data=data)
+# #equal variance and normal data whhen logged- 
+```
+
+
+Parametric test ANOVA lm
+
+```{r}
+
+zooprosum<-data %>% 
+  group_by(genotype,treatment) %>%
+  get_summary_stats(logzoopro, type = "common")
+
+zooprosumT<-kable(zooprosum, digits = 4,
+      caption = "Summary statistics for Log Zoox/protein densities",
+      col.names = c("Treatment", "Genotype", "Parameter", "n", "Min", "Max", "Median", "IQR", "Mean","SD", "SE", "CI"),
+      align = 'c') %>%
+  kable_styling(bootstrap_options =
+                  c("hover", "responsive", "striped"),
+                full_width = F, position = "center")
+
+zooprosumT
+
+# Proceed with ANOVA/lm post hoc Tukeys HSD for logged zooxanthellae
+zoopromoda<-aov(logzoopro~genotype*treatment,data)
+summary(zoopromoda)
+#treat
+#treatment diff 0.00262
+pairwise.t.test(data$logzoopro, data$treatment,
+                p.adjust.method = "bonf")
+#1 & 2 0.011 
+#2 & C 0.012
+
+
+pairwise.t.test(data$logzoopro, data$genotype,
+                p.adjust.method = "bonf")
+#NS
+
+pairwise.t.test(data$logzoopro,data$cat,
+                p.adjust.method = "bonf")
+
+#NS
+
+#more
+TukeyHSD(zoopromoda)
+#NS
+LzooPtSSt = summarySE(data, measurevar="logzoopro",
+                     groupvars=c("treatment"))
+
+LzooPtSSt
+LzooPgSSt = summarySE(data, measurevar="logzoopro",
+                     groupvars=c("genotype"))
+
+LzooPgSSt
+LzooPiSSt = summarySE(data, measurevar="logzoopro",
+                     groupvars=c("cat"))
+
+LzooPiSSt
+ 
+LzooPtbar<-ggplot(LzooPtSSt, aes(x=factor(treatment), y=logzoopro, fill=treatment)) + 
+    geom_bar(stat="identity", width=0.8) +
+    geom_errorbar(aes(ymin=logzoopro-se, ymax=logzoopro+se),
+                  width=.2) +
+    xlab("Treatment") +
+  ylab(expression(paste("log", O[2], mu,"mol cm"^{-2}, "hr"^{-1})))+
+  ggtitle('Log Zoo/Protein')+
+   theme_classic()+
+    scale_x_discrete(breaks=c("T1", "T2", "T3", "TC"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))
+ LzooPtbar
+  
+LzooPImod<-lm(logzoopro~genotype*treatment,data)
+summary(LzooPImod)
+# F- 2.755, DF- 36 p-value 0.01071**
+LzooPtmod<-aov(logzoopro~treatment,data)
+summary(LzooPtmod)
+# treat df 3 F5.122 P= 0.00399
+TukeyHSD(LzooPtmod)
+#T1:T2- 0.0127561
+#T2:Tc- 0.0005931
+LzooPgmod<-aov(logzoopro~genotype,data)
+summary(LzooPgmod)
+TukeyHSD(LzooPgmod)
+# NSD
+
+LzooPImodP<-ggplot(LzooPImod, aes(x=treatment, logzoopro, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Treatment')+
+  ylab(expression(paste(O[2], mu,"mol cm"^{-2}, "hr"^{-1})))+
+  ggtitle("Log Zoox/Protein")+
+  stat_compare_means(label.y=15.5, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+LzooPImodP
+
+ggexport(LzooPImodP, filename = "LzooPANOplotinter.pdf")
+
+
+LzooPgmodP<-ggplot(LzooPgmod, aes(x=genotype, logzoopro, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Genotype')+
+  ylab(expression(paste(O[2], mu,"mol cm"^{-2}, "hr"^{-1})))+
+  ggtitle("Log Zoox/Protein")+
+    stat_summary(fun.y=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=15, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))
+LzooPgmodP
+
+ggexport(LzooPgmodP, filename = "LzooPANOplotgeno.pdf")
+
+LzooPtmodP<-ggplot(LzooPtmod, aes(x=treatment, logzoopro, fill= treatment))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Treatment')+
+  ylab(expression(paste(O[2], mu,"mol cm"^{-2}, "hr"^{-1})))+
+  ggtitle("Log Zoox/Protein")+
+      stat_summary(fun.y=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=15, method = "anova")+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+
+LzooPtmodP
+ggexport(LzooPtmodP, filename = "LzooPANOplotrea.pdf")
+
+stat.testi<-aov(logzoopro~treatment,data)%>%
+  tukey_hsd()
+
+LzooPgmodPTu<-ggboxplot(data, x = "treatment", y = "logzoopro", fill= "treatment")+
+  stat_pvalue_manual(
+    stat.testi, label = "p.adj", 
+    y.position = c(15,16,16.5,17,17.5,18))
+
+plotzp<-LzooPgmodPTu+
+    scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+
+ggexport(plotzp, filename = "LzooPANOplottreaTUK.pdf")
+```
+
+Chlor/zoox (pg)
+```{r}
+ggplot(data, aes(y=chl_zoox_pg, x=treatment, fill = genotype)) + 
+  geom_boxplot() + 
+  theme_classic()
+```
+
+```{r}
+
+#Checking non logged transformed chl_zoox_pg data
+ggdensity(data$chl_zoox_pg, 
+          main = "Density plot of chl/zoox",
+          xlab = "chl/zoox (pg) of coral")
+#SKEWED
+ggqqplot(data$chl_zoox_pg)
+shapiro.test(data$chl_zoox_pg)
+#3.813e=6 
+
+#logdata
+data$logchl_zoox_pg<-log(data$chl_zoox_pg+1)
+
+ggdensity(data$logchl_zoox_pg, 
+          main = "Density plot of Chl:zoox",
+          xlab = "Chl:zoox content")
+#SKEWED
+ggqqplot(data$logchl_zoox_pg)
+shapiro.test(data$logchl_zoox_pg)
+#0.6546
+bartlett.test(logchl_zoox_pg~interaction(treatment,genotype), data=data)
+bartlett.test(logchl_zoox_pg~treatment, data=data)
+bartlett.test(logchl_zoox_pg~genotype, data=data)
+leveneTest(logchl_zoox_pg~treatment, data=data)
+leveneTest(logchl_zoox_pg~genotype, data=data)
+leveneTest(logchl_zoox_pg ~ treatment*genotype, data = data)
+fligner.test(logchl_zoox_pg~treatment, data=data)
+fligner.test(logchl_zoox_pg~genotype, data=data)
+# #equal variance and normal data whhen logged- 
+#equal variance ANOVA/lm
+```
+
+Parametric test ANOVA lm
+
+```{r}
+chzoosum<-data %>% 
+  group_by(genotype,treatment) %>%
+  get_summary_stats(logchl_zoox_pg, type = "common")
+
+chzoosumT<-kable(chzoosum, digits = 4,
+      caption = "Summary statistics for Log Zoox/protein densities",
+      col.names = c("Treatment", "Genotype", "Parameter", "n", "Min", "Max", "Median", "IQR", "Mean","SD", "SE", "CI"),
+      align = 'c') %>%
+  kable_styling(bootstrap_options =
+                  c("hover", "responsive", "striped"),
+                full_width = F, position = "center")
+
+chzoosumT
+
+# Proceed with ANOVA/lm post hoc Tukeys HSD for logged zooxanthellae
+LchlPmoda<-aov(logchl_zoox_pg~genotype*treatment,data)
+summary(LchlPmoda)
+#treat
+#treatment diff 0.00776
+#genotype diff 0.03120
+pairwise.t.test(data$logchl_zoox_pg, data$treatment,
+                p.adjust.method = "bonf")
+#1 & 2 0.027 
+#2 & C 0.014
+
+
+pairwise.t.test(data$logchl_zoox_pg, data$genotype,
+                p.adjust.method = "bonf")
+#NA
+
+pairwise.t.test(data$logchl_zoox_pg,data$cat,
+                p.adjust.method = "bonf")
+
+#T1M6:T2K2- 0.019
+
+#more
+TukeyHSD(LchlPmoda)
+
+#K2:T2-M6:T1  1.612648919  0.0133628
+LchlPtSSt = summarySE(data, measurevar="logchl_zoox_pg",
+                     groupvars=c("treatment"))
+
+LchlPtSSt
+LchlPgSSt = summarySE(data, measurevar="logchl_zoox_pg",
+                     groupvars=c("genotype"))
+
+LchlPgSSt
+LchlPiSSt = summarySE(data, measurevar="logchl_zoox_pg",
+                     groupvars=c("cat"))
+
+LchlPiSSt
+ 
+LchlPtbar<-ggplot(LchlPtSSt, aes(x=factor(treatment), y=logchl_zoox_pg, fill=treatment)) + 
+    geom_bar(stat="identity", width=0.8) +
+    geom_errorbar(aes(ymin=logchl_zoox_pg-se, ymax=logchl_zoox_pg+se),
+                  width=.2) +
+    xlab("Treatment") +
+  ylab(expression(paste("log", O[2], mu,"mol cm"^{-2}, "hr"^{-1})))+
+  ggtitle('Logc')+
+   theme_classic()+
+    scale_x_discrete(breaks=c("T1", "T2", "T3", "TC"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))
+ LchlPtbar
+  
+LchlPImod<-lm(logchl_zoox_pg~genotype*treatment,data)
+summary(LchlPImod)
+# F- 2.224, DF- 36 p-value 0.03511**
+LchlPtmod<-aov(logchl_zoox_pg~treatment,data)
+summary(LchlPtmod)
+# treat df 3 F 4.369 P= 0.00889 
+TukeyHSD(LchlPtmod)
+#T1:T2- 0.0223825
+#T2:Tc- 0.0119583
+LchlPgmod<-aov(logchl_zoox_pg~genotype,data)
+summary(LchlPgmod)
+#df 2 F 3.258 p= 0.0477
+TukeyHSD(LchlPgmod)
+#NA 0.0617 M6-K2
+
+LchlPImodP<-ggplot(LchlPImod, aes(x=treatment, logchl_zoox_pg, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Treatment')+
+  ylab(expression(paste(O[2], mu,"mol cm"^{-2}, "hr"^{-1})))+
+  ggtitle("Log  Chlorophyll/zoo")+
+  stat_compare_means(label.y=4.5, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+LchlPImodP
+
+ggexport(LchlPImodP, filename = "LchlPANOplotinter.pdf")
+
+
+LchlPgmodP<-ggplot(LchlPgmod, aes(x=genotype, logchl_zoox_pg, fill= genotype))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Genotype')+
+  ylab(expression(paste(O[2], mu,"mol cm"^{-2}, "hr"^{-1})))+
+  ggtitle("Log  Chlorophyll/zoo")+
+    stat_summary(fun.y=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=4.5, method = "anova")+
+  scale_fill_manual(values = c('red','green4', 'blue'))
+LchlPgmodP
+
+ggexport(LchlPgmodP, filename = "LchlPANOplotgeno.pdf")
+
+LchlPtmodP<-ggplot(LchlPtmod, aes(x=treatment, logchl_zoox_pg, fill= treatment))+
+  stat_boxplot(geom= "errorbar", width= 0.5, position = position_dodge(1))+
+  geom_boxplot(position = position_dodge(1),outlier.shape=1)+
+  theme_classic()+
+  xlab('Treatment')+
+  ylab(expression(paste(O[2], mu,"mol cm"^{-2}, "hr"^{-1})))+
+  ggtitle("Log  Chlorophyll/zoo")+
+      stat_summary(fun.y=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  stat_compare_means(label.y=4.5, method = "anova")+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+
+LchlPtmodP
+ggexport(LchlPtmodP, filename = "LchlPANOplotrea.pdf")
+
+stat.testi<-aov(logchl_zoox_pg~treatment,data)%>%
+  tukey_hsd()
+
+LchlPgmodPTu<-ggboxplot(data, x = "treatment", y = "logchl_zoox_pg", fill= "treatment")+
+  stat_pvalue_manual(
+    stat.testi, label = "p.adj", 
+    y.position = c(4,5,6,6.5,7,8))
+
+plotczp<-LchlPgmodPTu+
+    scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+plotczp
+ggexport(plotczp, filename = "LchlPANOplottreaTUK.pdf")
+
+stat.testi<-aov(logchl_zoox_pg~genotype,data)%>%
+  tukey_hsd()
+
+LchlPgmodPTug<-ggboxplot(data, x = "genotype", y = "logchl_zoox_pg", fill= "genotype")+
+  stat_pvalue_manual(
+    stat.testi, label = "p.adj", 
+    y.position = c(4,5,6))
+
+plotczpg<-LchlPgmodPTug+
+    scale_fill_manual(values = c('red','green4', 'blue'))
+plotczpg
+ggexport(plotczpg, filename = "LchlPANOplotgenoTUK.pdf")
+```
+
+
+Chl/protein
+```{r}
+ggplot(data, aes(y=chl_protein, x=treatment, fill = genotype)) + 
+  geom_boxplot() + 
+  theme_classic()
+```
+
+```{r}
+
+#Checking non logged transformed chl_protein data
+ggdensity(data$chl_protein, 
+          main = "Density plot of chl_protein",
+          xlab = "chl_protein of coral")
+#SKEWED
+ggqqplot(data$chl_protein)
+shapiro.test(data$chl_protein)
+#3.419e-5 
+#logdata
+data$logchl_protein<-log(data$chl_protein+1)
+
+ggdensity(data$logchl_protein, 
+          main = "Density plot of Chl:protein",
+          xlab = "Chl:Protein content")
+#SKEWED
+ggqqplot(data$logchl_protein)
+shapiro.test(data$logchl_protein)
+#0.07968
+bartlett.test(logchl_protein~interaction(treatment,genotype), data=data)
+#0.007
+bartlett.test(logchl_protein~treatment, data=data)
+#0.04551
+bartlett.test(logchl_protein~genotype, data=data)
+#0.01166
+leveneTest(logchl_protein~treatment, data=data)
+leveneTest(logchl_protein~genotype, data=data)
+#0.0397
+leveneTest(logchl_protein ~ treatment*genotype, data = data)
+#4.39e-5
+fligner.test(logchl_protein~treatment, data=data)
+fligner.test(logchl_protein~genotype, data=data)
+# the variance (and thus standard deviations) of the groups differ significantly DO NOT USE
+#logit transformation
+data$logitchl_protein<-logit(data$chl_protein)
+
+ggdensity(data$logitchl_protein, 
+          main = "Density plot of Chl:protein",
+          xlab = "Protein content")
+#SKEWED
+ggqqplot(data$logitchl_protein)
+shapiro.test(data$logitchl_protein)
+#0.5466
+bartlett.test(logitchl_protein~interaction(treatment,genotype), data=data)
+#0.0104
+bartlett.test(logitchl_protein~treatment, data=data)
+bartlett.test(logitchl_protein~genotype, data=data)
+#0.03649
+leveneTest(logitchl_protein~treatment, data=data)
+leveneTest(logitchl_protein~genotype, data=data)
+leveneTest(logitchl_protein ~ treatment*genotype, data = data)
+#0.0001296
+fligner.test(logitchl_protein~treatment, data=data)
+fligner.test(logitchl_protein~genotype, data=data)
+#Non-parametric testing for Chl:protein, sample variance is not the same between the populations 
+
+# data failed Bartlett & Levenes test for homogeneity  #non-parameteric test below
+
+# USE NON PARAMETRIC TESTS FOR CHLOROPHYLL:PROTEIN
+#Kruskal Wallis kruskal.test(y~x) y is continuous, x is categorical
+```
+
+Non parametric Kruskal Wallis
+```{r}
+data %>% 
+  group_by(genotype,treatment) %>%
+  get_summary_stats(chl_protein, type = "common")
+
+#box plot
+ggboxplot(data, x = "treatment", y = "chl_protein")
+ggboxplot(data, x = "genotype", y = "chl_protein")
+
+res.kruskal <- data %>% kruskal_test(chl_protein ~ treatment)
+res.kruskal
+
+res.kruskal2 <- data %>% kruskal_test(chl_protein ~ genotype)
+res.kruskal2
+#0.0134
+
+#EFFECT SIZE
+data %>% kruskal_effsize(chl_protein ~ treatment)
+# -0.0349-- small
+data %>% kruskal_effsize(chl_protein ~ genotype)
+# 0.147- large
+# Pairwise comparisons
+pwc <- data %>% 
+  dunn_test(chl_protein ~ treatment, p.adjust.method = "BH") 
+pwc
+#NA no differences
+pwcg <- data %>% 
+  dunn_test(chl_protein ~ genotype, p.adjust.method = "BH") 
+pwcg
+#K2:M6- 0.0110
+pwc <- pwc %>% add_xy_position(x = "treatment")
+pwcg <- pwcg %>% add_xy_position(x = "genotype")
+
+mod<-lm(chl_protein~treatment*genotype,data)
+
+effects::allEffects(mod)
+summary(mod)
+#F 1.302 df 36 p-value- 02631
+res.kruskalD <- data %>% kruskal_test(chl_protein ~ cat)
+res.kruskalD
+# stat 14.3 df 11 p-value 0.216
+#EFFECT SIZE
+data %>% kruskal_effsize(chl_protein ~ cat)
+# 0.0921 -moderate
+dunn.test(data$chl_protein, data$cat, method="BH")
+#chi-squared = 14.3163, df = 11, p-value = 0.2
+pwcD <- data %>% 
+  dunn_test(chl_protein ~ cat, p.adjust.method = "BH") 
+pwcD
+pwcD <- pwcD %>% add_xy_position(x = "cat")
+
+
+ChloProplotT<-ggboxplot(data, x = "treatment", y = "chl_protein", color= "black", fill="treatment", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab('Chlorophyll/Protein')+
+  xlab('Treatment')+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))+
+  stat_summary(fun.y=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))+
+   stat_pvalue_manual(pwc, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal, detailed = TRUE),
+    caption = get_pwc_label(pwc)
+    )
+
+ChloProplotT
+ggexport(ChloProplotT, filename = "ChloProplotT.pdf")
+
+
+ChloProplotG<-ggboxplot(data, x = "genotype", y = "chl_protein", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab('Chlorophyll/Protein')+
+  xlab('Genotype')+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  stat_summary(fun.y=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcg, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskal2, detailed = TRUE),
+    caption = get_pwc_label(pwcg)
+    )
+
+ChloProplotG
+ggexport(ChloProplotG, filename = "ChloProplotG.pdf")
+
+
+ChloProplotI<-ggboxplot(data, x = "cat", y = "chl_protein", color= "black", fill="genotype", outlier.shape = 1) +
+  stat_boxplot(geom='errorbar', linetype=1, width=0.5)+  #whiskers
+  ylab('Chlorophyll/Protein')+
+  xlab('')+
+  ggtitle('')+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  stat_summary(fun.y=mean, geom="point", size=2)+ #line is median, and closed circle is mean
+   stat_pvalue_manual(pwcD, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.kruskalD, detailed = TRUE),
+    caption = get_pwc_label(pwcD)
+    )
+ChloProplotI
+
+ggexport(ChloProplotI, filename = "ChloProplotI.pdf")
+
+
+ggboxplot(data, x = "treatment", y = "chl_protein", color= "black", fill="genotype", outlier.shape = 1) +
+  ylab('Total Chlorophyll/Protein')+
+  xlab('Treatment')+
+  scale_fill_manual(values = c('red','green4', 'blue'))+
+  stat_summary(fun.y=mean, geom="point", size=2)+
+  scale_x_discrete(breaks=c("T1", "T2", "T3", "Tc"),
+        labels=c("Sprinkler", "Feeding", "Interactive","Control"))
+
+ggboxplot(data, x = "genotype", y = "chl_protein", color= "black", fill="treatment", outlier.shape = 1) +
+  ylab('Total Chlorophyll/Protein')+
+  xlab('Genotype')+
+  scale_fill_manual(values = c('#66CCFF','#FFFF00', '#FF00CC', '#66FF33'))
+```
+
+
+```{r}
+#write.csv(data,"C:/Github/TPC_Acropora/R_output_Data_Frames/EcophysLOGGEDdata.csv")
+
+```
